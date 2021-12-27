@@ -1,0 +1,8 @@
+# IDE
+.idea
+.vscode
+
+# Output of the go covetage tool
+*.out
+
+.DS_Store
