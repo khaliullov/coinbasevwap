@@ -1,4 +1,12 @@
-.PHONY: help lint test run debug
+BINARY_NAME ?= coinbasevwap
+
+.PHONY: all build help lint test run debug
+
+all: build
+
+build:	## Build application
+build:
+	go build -o ${BINARY_NAME}
 
 help: pad = 24 # padding for two columns
 help:	## Show this help
@@ -14,9 +22,8 @@ help:	## Show this help
 		| awk -F "#" '{printf ("%s% *s%s\n", $$1, $(pad)-length($$1), "", $$3)}'
 	@echo
 
-.PHONY: help
-
 lint:	## Start linter
+lint:
 	golangci-lint run
 
 test:	## Run tests

@@ -2,10 +2,11 @@ package usecase
 
 import (
 	"errors"
+	"strconv"
+
 	"github.com/khaliullov/coinbasevwap/internal/entity"
 	"github.com/khaliullov/coinbasevwap/internal/producers"
 	"github.com/khaliullov/coinbasevwap/internal/repository"
-	"strconv"
 )
 
 type MatchUseCase interface {

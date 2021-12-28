@@ -3,6 +3,7 @@ package producers
 import (
 	"encoding/json"
 	"fmt"
+
 	"github.com/khaliullov/coinbasevwap/internal/entity"
 )
 
