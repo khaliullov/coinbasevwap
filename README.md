@@ -1,5 +1,8 @@
 # Coinbase rate VWAP
 
+[![Build Status](https://github.com/khaliullov/coinbasevwap/actions/workflows/test.yml/badge.svg)](https://github.com/khaliullov/coinbasevwap/actions/workflows/test.yml)
+[![Coverage Status](https://coveralls.io/repos/github/khaliullov/coinbasevwap/badge.svg?branch=master)](https://coveralls.io/github/khaliullov/coinbasevwap?branch=master)
+
 Application that calculates VWAP in a real-time using Coinbase websocket
 steaming protocol of cryptocurrency transactions updates.
 Calculated values of VWAP are streamed to os.Stdout for each trading pair.

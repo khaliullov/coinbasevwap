@@ -75,7 +75,11 @@ func (m *matchRepository) PopFirst(tradingPair string) (*entity.Deal, error) {
 		return nil, nil
 	}
 
-	return storage.Deals.Remove(element).(*entity.Deal), nil
+	deal := storage.Deals.Remove(element).(*entity.Deal)
+	storage.VolumeSum -= deal.Volume
+	storage.VolumePriceSum -= deal.Volume * deal.Price
+
+	return deal, nil
 }
 
 func (m *matchRepository) Append(tradingPair string, deal *entity.Deal) error {

@@ -81,8 +81,7 @@ func main() {
 
 	go func() {
 		for {
-			select {
-			case <-interrupt:
+			if x := <-interrupt; x != nil {
 				log.Info("interrupt")
 				client.Stop()
 				return

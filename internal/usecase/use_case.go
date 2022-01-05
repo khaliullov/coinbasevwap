@@ -6,6 +6,9 @@ import (
 	"github.com/khaliullov/coinbasevwap/internal/repository"
 )
 
+//go:generate mockery --name UseCase --case underscore --output ../../pkg/mocks/usecase --outpkg usecase
+//go:generate mockery --name MatchUseCase --case underscore --output ../../pkg/mocks/usecase --outpkg usecase
+
 type UseCase interface {
 	Match() MatchUseCase
 }
