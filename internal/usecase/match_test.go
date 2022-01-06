@@ -81,7 +81,7 @@ func (suite *MatchUseCaseSuite) Test_MatchUseCase_UpdateVWAP_ZeroVolume() {
 		Price: "100.0",
 	})
 	assert.Error(suite.T(), err)
-	assert.ErrorIs(suite.T(), ErrZeroValue, err)
+	assert.ErrorIs(suite.T(), ErrNegativeOrZeroValue, err)
 }
 
 // Test_MatchUseCase_UpdateVWAP_ZeroPrice – price is zero
@@ -91,7 +91,27 @@ func (suite *MatchUseCaseSuite) Test_MatchUseCase_UpdateVWAP_ZeroPrice() {
 		Price: "0.0",
 	})
 	assert.Error(suite.T(), err)
-	assert.ErrorIs(suite.T(), ErrZeroValue, err)
+	assert.ErrorIs(suite.T(), ErrNegativeOrZeroValue, err)
+}
+
+// Test_MatchUseCase_UpdateVWAP_NegativeVolume – volume is negative
+func (suite *MatchUseCaseSuite) Test_MatchUseCase_UpdateVWAP_NegativeVolume() {
+	err := suite.useCase.Match().UpdateVWAP(&entity.Match{
+		Size:  "-1",
+		Price: "100.0",
+	})
+	assert.Error(suite.T(), err)
+	assert.ErrorIs(suite.T(), ErrNegativeOrZeroValue, err)
+}
+
+// Test_MatchUseCase_UpdateVWAP_NegativePrice – price is negative
+func (suite *MatchUseCaseSuite) Test_MatchUseCase_UpdateVWAP_NegativePrice() {
+	err := suite.useCase.Match().UpdateVWAP(&entity.Match{
+		Size:  "100",
+		Price: "-1.0",
+	})
+	assert.Error(suite.T(), err)
+	assert.ErrorIs(suite.T(), ErrNegativeOrZeroValue, err)
 }
 
 // Test_MatchUseCase_UpdateVWAP_AppendError – error while appending new deal

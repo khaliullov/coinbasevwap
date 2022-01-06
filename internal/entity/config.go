@@ -1,5 +1,6 @@
 package entity
 
+// Config – configuration of service
 type Config struct {
 	URL        string   `json:"url"`
 	Capacity   int      `json:"capacity"`

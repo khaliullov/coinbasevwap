@@ -17,8 +17,12 @@ import (
 	"github.com/khaliullov/coinbasevwap/internal/usecase"
 )
 
-const DefaultProducts = "BTC-USD,ETH-USD,ETH-BTC"
-const DefaultVolumeSize = 200
+const (
+	// DefaultProducts – default trading pairs to subscribed to
+	DefaultProducts = "BTC-USD,ETH-USD,ETH-BTC"
+	// DefaultVolumeSize – maximum storage size of transactions for each trading pair
+	DefaultVolumeSize = 200
+)
 
 func init() {
 	log.SetOutput(os.Stderr)

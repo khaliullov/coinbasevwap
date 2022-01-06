@@ -12,10 +12,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+// WSState – type for holding states
 type WSState byte
+
+// WSCommand – type for sending commands
 type WSCommand byte
 
 type (
+	// WSMachine – WebSocket state machine structure
 	WSMachine struct {
 		url         string
 		headers     http.Header
@@ -31,6 +35,7 @@ type (
 		ioEventCh   chan bool
 		wg          sync.WaitGroup
 	}
+	// WSStatus – status structure
 	WSStatus struct {
 		State WSState
 		Error error
@@ -62,8 +67,11 @@ const (
 )
 
 var (
-	ErrWSCanceled             = errors.New("cancelled")
-	ErrWSOutputChannelClosed  = errors.New("output channel closed")
+	// ErrWSCanceled – connection cancelled
+	ErrWSCanceled = errors.New("cancelled")
+	// ErrWSOutputChannelClosed – trying to send message to the closed output channel
+	ErrWSOutputChannelClosed = errors.New("output channel closed")
+	// ErrWSControlChannelClosed – trying to send message to the closed control channel
 	ErrWSControlChannelClosed = errors.New("control channel closed")
 )
 
@@ -95,6 +103,7 @@ func (c WSCommand) String() string {
 	return fmt.Sprintf("UNKNOWN COMMAND %d", c)
 }
 
+// NewWebSocket – constructor of WebSocket state machine
 func NewWebSocket(url string, headers http.Header) *WSMachine {
 	res := &WSMachine{
 		url:         url,
@@ -115,26 +124,32 @@ func NewWebSocket(url string, headers http.Header) *WSMachine {
 	return res
 }
 
+// URL – get WebSocket URL
 func (m *WSMachine) URL() string {
 	return m.url
 }
 
+// Headers – get request headers
 func (m *WSMachine) Headers() http.Header {
 	return m.headers
 }
 
+// Input – get input channel
 func (m *WSMachine) Input() <-chan []byte {
 	return m.inpCh
 }
 
+// Output – get output channel
 func (m *WSMachine) Output() chan<- []byte {
 	return m.outCh
 }
 
+// Status – get status channel
 func (m *WSMachine) Status() <-chan WSStatus {
 	return m.stsCh
 }
 
+// Command – get Command channel
 func (m *WSMachine) Command() chan<- WSCommand {
 	return m.cmdCh
 }
@@ -154,10 +169,9 @@ func (m *WSMachine) connect() {
 			m.conReturnCh <- conn
 			m.stsCh <- WSStatus{State: WS_CONNECTED}
 			return
-		} else {
-			log.WithField("error", err).Error("connect error")
-			m.stsCh <- WSStatus{WS_DISCONNECTED, err}
 		}
+		log.WithField("error", err).Error("connect error")
+		m.stsCh <- WSStatus{WS_DISCONNECTED, err}
 
 		m.stsCh <- WSStatus{State: WS_WAITING}
 		select {
@@ -247,23 +261,22 @@ func (m *WSMachine) write(conn *websocket.Conn, msgType int) {
 			if !ok {
 				m.wErrorCh <- ErrWSControlChannelClosed
 				return
-			} else {
-				switch cmd {
-				case WS_QUIT:
-					log.Debug("write received WS_QUIT command")
+			}
+			switch cmd {
+			case WS_QUIT:
+				log.Debug("write received WS_QUIT command")
+				m.wErrorCh <- ErrWSCanceled
+				return
+			case WS_PING:
+				if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(3*time.Second)); err != nil {
+					log.WithField("error", err).Error("ping error")
 					m.wErrorCh <- ErrWSCanceled
 					return
-				case WS_PING:
-					if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(3*time.Second)); err != nil {
-						log.WithField("error", err).Error("ping error")
-						m.wErrorCh <- ErrWSCanceled
-						return
-					}
-				case WS_USE_TEXT:
-					msgType = websocket.TextMessage
-				case WS_USE_BINARY:
-					msgType = websocket.BinaryMessage
 				}
+			case WS_USE_TEXT:
+				msgType = websocket.TextMessage
+			case WS_USE_BINARY:
+				msgType = websocket.BinaryMessage
 			}
 		}
 	}
@@ -278,6 +291,7 @@ func (m *WSMachine) cleanup() {
 	// drain inpCh channels
 	<-time.After(50 * time.Millisecond) // small pause to let things react
 
+drainLoop:
 	for {
 		select {
 		case _, ok := <-m.outCh:
@@ -304,7 +318,7 @@ func (m *WSMachine) cleanup() {
 				m.wErrorCh = nil
 			}
 		default:
-			break
+			break drainLoop
 		}
 	}
 
@@ -316,6 +330,7 @@ func (m *WSMachine) cleanup() {
 	close(m.stsCh)
 }
 
+// MainLoop – start WebSocket state machine
 func (m *WSMachine) MainLoop() {
 	var conn *websocket.Conn
 	reading := false

@@ -55,7 +55,7 @@ func (e *Echoer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func http_to_ws(u string) string {
+func httpToWs(u string) string {
 	return "ws" + u[len("http"):]
 }
 
@@ -106,7 +106,7 @@ func (suite *WebSocketSuite) TestConnect() {
 	srv := httptest.NewServer(NewEchoer(suite.T()))
 	defer srv.Close()
 
-	URL := http_to_ws(srv.URL)
+	URL := httpToWs(srv.URL)
 	suite.T().Logf("Server URL: %v", URL)
 
 	ws := NewWebSocket(URL, http.Header{})
@@ -142,7 +142,7 @@ func (suite *WebSocketSuite) TestReconnect() {
 	srv := httptest.NewServer(NewEchoer(suite.T()))
 	defer srv.Close()
 
-	URL := http_to_ws(srv.URL)
+	URL := httpToWs(srv.URL)
 	suite.T().Logf("Server URL: %v", URL)
 
 	ws := NewWebSocket(URL, http.Header{})
@@ -173,21 +173,21 @@ func (suite *WebSocketSuite) TestReconnect() {
 			if st.State != state {
 				suite.T().Errorf("st.State is %v, expected %v. st.Error is %v", st.State, state, st.Error)
 			}
-		case <-time.After(200*time.Millisecond):
+		case <-time.After(200 * time.Millisecond):
 			suite.T().Errorf("WSChan has not changed state in time, expected %v", state)
 		}
 	}
 
 	// cleanup
 	cmdCh <- WS_QUIT
-	<-stsCh  // DISCONNECTED
+	<-stsCh // DISCONNECTED
 }
 
 func (suite *WebSocketSuite) TestServerDisappear() {
 	srv := httptest.NewServer(NewEchoer(suite.T()))
 	defer srv.Close()
 
-	URL := http_to_ws(srv.URL)
+	URL := httpToWs(srv.URL)
 	suite.T().Logf("Server URL: %v", URL)
 
 	ws := NewWebSocket(URL, http.Header{})
@@ -220,21 +220,21 @@ func (suite *WebSocketSuite) TestServerDisappear() {
 			if st.State != state {
 				suite.T().Errorf("st.State is %v, expected %v. st.Error is %v", st.State, state, st.Error)
 			}
-		case <-time.After(200*time.Millisecond):
+		case <-time.After(200 * time.Millisecond):
 			suite.T().Errorf("WSChan has not changed state in time, expected %v", state)
 		}
 	}
 
 	// cleanup
 	cmdCh <- WS_QUIT
-	<-stsCh  // DISCONNECTED
+	<-stsCh // DISCONNECTED
 }
 
 func (suite *WebSocketSuite) TestEcho() {
 	srv := httptest.NewServer(NewEchoer(suite.T()))
 	defer srv.Close()
 
-	URL := http_to_ws(srv.URL)
+	URL := httpToWs(srv.URL)
 	suite.T().Logf("Server URL: %v", URL)
 
 	ws := NewWebSocket(URL, http.Header{})
@@ -267,13 +267,13 @@ func (suite *WebSocketSuite) TestEcho() {
 		} else if !bytes.Equal(msg, orig) {
 			suite.T().Errorf("echo message mismatch: %v != %v", msg, orig)
 		}
-	case <-time.After(100*time.Millisecond):
+	case <-time.After(100 * time.Millisecond):
 		suite.T().Error("Timeout when waiting for an echo message")
 	}
 
 	// cleanup
 	cmdCh <- WS_QUIT
 
-	<-stsCh  // DISCONNECTED
+	<-stsCh // DISCONNECTED
 	srv.Close()
 }

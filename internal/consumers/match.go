@@ -10,17 +10,19 @@ import (
 )
 
 type matchConsumer struct {
-	config *entity.Config
+	config  *entity.Config
 	useCase usecase.UseCase
 }
 
 var (
+	// ErrBadMatchMessage – message in wrong format was received
 	ErrBadMatchMessage = errors.New("bad message")
 )
 
+// NewMatchConsumer – create new match consumer that processes *entity.Match events
 func NewMatchConsumer(useCase usecase.UseCase, config *entity.Config) Consumer {
 	return &matchConsumer{
-		config: config,
+		config:  config,
 		useCase: useCase,
 	}
 }

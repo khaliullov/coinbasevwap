@@ -14,21 +14,31 @@ import (
 )
 
 const (
+	// DefaultCoinbaseRateFeedWebsocketURL – WebSocket scheme/host/port of Coinbase rate feed to connect to
 	DefaultCoinbaseRateFeedWebsocketURL = "wss://ws-feed.exchange.coinbase.com"
-	DefaultCoinbaseRateFeedChannel      = "matches"
+	// DefaultCoinbaseRateFeedChannel – default channel with transactions
+	DefaultCoinbaseRateFeedChannel = "matches"
 
-	TypeSubscribe   = "subscribe"
+	// TypeSubscribe – request type for subscribing
+	TypeSubscribe = "subscribe"
+	// TypeUnsubscribe – request type for unsubscribing
 	TypeUnsubscribe = "unsubscribe"
 )
 
 var (
+	// ErrBadConfiguration – wrong configuration of service
 	ErrBadConfiguration = errors.New("bad configuration")
+	// ErrDisconnected – disconnected from Coinbase rate feed WebSocket
 	ErrDisconnected = errors.New("disconnected")
+	// ErrBadJSON – could not parse JSON from Coinbase rate feed WebSocket
 	ErrBadJSON = errors.New("could not parse JSON")
+	// ErrFailedToDeserialize – failed to deserialize data from JSON to corresponding entity
 	ErrFailedToDeserialize = errors.New("failed to deserialize")
+	// ErrUnsupportedMessageType – received message of unknown type
 	ErrUnsupportedMessageType = errors.New("skipping unsupported message with unknown type")
 )
 
+// CoinbaseRateFeedInterface – interface of Coinbase rate feed client
 type CoinbaseRateFeedInterface interface {
 	RegisterMatchConsumer(consumer consumers.Consumer)
 	Run()
@@ -43,6 +53,7 @@ type coinbaseRateFeed struct {
 	subscribers []consumers.Consumer
 }
 
+// NewCoinbaseRateFeed – create WebSocket client for Coinbase rate feed
 func NewCoinbaseRateFeed(wg *sync.WaitGroup, config *entity.Config) (CoinbaseRateFeedInterface, error) {
 	if config.URL == "" || len(config.Channels) == 0 || len(config.ProductIDs) == 0 {
 		return nil, ErrBadConfiguration
@@ -74,7 +85,7 @@ func (m *coinbaseRateFeed) publishMatchMessage(packet *entity.Match) {
 		if err != nil {
 			log.WithFields(log.Fields{
 				"packet": packet,
-				"error": err,
+				"error":  err,
 			}).Error("Match Consumer returned an error")
 		}
 	}

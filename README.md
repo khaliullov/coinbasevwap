@@ -2,6 +2,7 @@
 
 [![Build Status](https://github.com/khaliullov/coinbasevwap/actions/workflows/test.yml/badge.svg)](https://github.com/khaliullov/coinbasevwap/actions/workflows/test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/khaliullov/coinbasevwap/badge.svg?branch=master)](https://coveralls.io/github/khaliullov/coinbasevwap?branch=master)
+[![Go Report Card](https://goreportcard.com/badge/github.com/khaliullov/coinbasevwap)](https://goreportcard.com/report/github.com/khaliullov/coinbasevwap)
 
 Application that calculates VWAP in a real-time using Coinbase websocket
 steaming protocol of cryptocurrency transactions updates.

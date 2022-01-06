@@ -7,6 +7,7 @@ import (
 	"github.com/khaliullov/coinbasevwap/internal/entity"
 )
 
+// VWAP – interface of VWAP producer
 type VWAP interface {
 	Send(msg *entity.VWAP) error
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/khaliullov/coinbasevwap/internal/entity"
 )
 
+// MatchRepository – Match repository interface
 type MatchRepository interface {
 	Len(tradingPair string) (int, error)
 	PopFirst(tradingPair string) (*entity.Deal, error)
@@ -14,6 +15,7 @@ type MatchRepository interface {
 	GetVWAP(tradingPair string) (*entity.VWAP, error)
 }
 
+// MatchStorage – storage for storing history of transactions and temporary sums for calculating VWAP
 type MatchStorage struct {
 	VolumeSum      float32
 	VolumePriceSum float32
@@ -26,8 +28,10 @@ type matchRepository struct {
 }
 
 var (
+	// ErrTradingPairNotFound – transaction from unsubsribed trading pair
 	ErrTradingPairNotFound = errors.New("trading pair not found")
-	ErrDivisionByZero      = errors.New("division by zero")
+	// ErrDivisionByZero – VWAP calculation leads to division by zero
+	ErrDivisionByZero = errors.New("division by zero")
 )
 
 func newMatchRepository(config *entity.Config) MatchRepository {

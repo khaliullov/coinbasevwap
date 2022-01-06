@@ -1,5 +1,6 @@
 package entity
 
+// Match – entity of trading pair event
 type Match struct {
 	TradeID      int64  `json:"trade_id" mapstructure:"trade_id"`
 	MakerOrderID string `json:"maker_order_id" mapstructure:"maker_order_id"`

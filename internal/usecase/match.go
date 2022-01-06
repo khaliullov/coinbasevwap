@@ -9,6 +9,7 @@ import (
 	"github.com/khaliullov/coinbasevwap/internal/repository"
 )
 
+// MatchUseCase – use case for processing *entity.Match entities
 type MatchUseCase interface {
 	UpdateVWAP(match *entity.Match) error
 }
@@ -19,7 +20,8 @@ type matchUseCase struct {
 	config   *entity.Config
 }
 
-var ErrZeroValue = errors.New("zero value of volume or price")
+// ErrNegativeOrZeroValue – wrong *entity.Match instance with Size or Price fields having zero or negative values
+var ErrNegativeOrZeroValue = errors.New("negative or zero value of volume or price")
 
 func newMatchUseCase(
 	repo repository.Repository,
@@ -44,11 +46,11 @@ func (m *matchUseCase) UpdateVWAP(match *entity.Match) error {
 	}
 	deal := entity.Deal{
 		Volume: float32(volume),
-		Price: float32(price),
+		Price:  float32(price),
 	}
 
-	if deal.Volume == 0 || deal.Price == 0 {
-		return ErrZeroValue
+	if deal.Volume <= 0 || deal.Price <= 0 {
+		return ErrNegativeOrZeroValue
 	}
 
 	err = m.repo.Match().Append(match.ProductID, &deal)
