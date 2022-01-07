@@ -35,12 +35,12 @@ func getConfig() *entity.Config {
 	logLevel := flag.String("log-level", "error", "Logging level")
 	products := flag.String("products", DefaultProducts, "Products to subscribe to")
 	channel := flag.String("channel", clients.DefaultCoinbaseRateFeedChannel, "Channel to subscribe to")
-	feedUrl := flag.String("feed-url", clients.DefaultCoinbaseRateFeedWebsocketURL, "Coinbase feed URL")
+	feedURL := flag.String("feed-url", clients.DefaultCoinbaseRateFeedWebsocketURL, "Coinbase feed URL")
 	capacity := flag.Int("capacity", DefaultVolumeSize, "Capacity for storing data for VWAP calculation")
 
 	flag.Parse()
 
-	if *help || *products == "" || *channel == "" || *feedUrl == "" || *capacity == 0 || *logLevel == "" {
+	if *help || *products == "" || *channel == "" || *feedURL == "" || *capacity == 0 || *logLevel == "" {
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
@@ -54,7 +54,7 @@ func getConfig() *entity.Config {
 	cfg := entity.Config{
 		Channels:   strings.Split(*channel, ","),
 		ProductIDs: strings.Split(*products, ","),
-		URL:        *feedUrl,
+		URL:        *feedURL,
 		Capacity:   *capacity,
 	}
 

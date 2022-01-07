@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -72,7 +73,10 @@ func (suite *WebSocketSuite) TearDownTest() {
 }
 
 func (suite *WebSocketSuite) TestBadURL() {
-	ws := NewWebSocket("ws://websocket.bad.url/", http.Header{})
+	url := "ws://websocket.bad.url/"
+	ws := NewWebSocket(url, http.Header{})
+	assert.Equal(suite.T(), url, ws.URL())
+	assert.Equal(suite.T(), http.Header{}, ws.Headers())
 
 	ws.wg.Add(1)
 

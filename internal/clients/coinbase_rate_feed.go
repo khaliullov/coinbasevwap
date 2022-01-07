@@ -203,11 +203,12 @@ func (m *coinbaseRateFeed) Run() {
 	output := m.wsm.Output()
 
 	go func() {
+	status:
 		for {
 			select {
 			case st := <-status:
 				if m.processStatus(command, output, st) != nil {
-					break
+					break status
 				}
 			case msg, ok := <-input:
 				if ok {
