@@ -22,7 +22,7 @@ import (
 type CoinbaseRateFeedSuite struct {
 	suite.Suite
 	wg     *sync.WaitGroup
-	client *coinbaseRateFeed
+	config *entity.Config
 }
 
 func TestCoinbaseRateFeedSuite(t *testing.T) {
@@ -31,21 +31,11 @@ func TestCoinbaseRateFeedSuite(t *testing.T) {
 
 func (suite *CoinbaseRateFeedSuite) SetupTest() {
 	suite.wg = new(sync.WaitGroup)
-	suite.ReinitClient()
-}
-
-func (suite *CoinbaseRateFeedSuite) ReinitClient() {
-	suite.client = &coinbaseRateFeed{
-		wg:  suite.wg,
-		wsm: NewWebSocket(DefaultCoinbaseRateFeedWebsocketURL, http.Header{}),
-		config: &entity.Config{
-			URL:        DefaultCoinbaseRateFeedWebsocketURL,
-			Capacity:   200,
-			Channels:   []string{DefaultCoinbaseRateFeedChannel},
-			ProductIDs: []string{"BTC-USD", "ETH-USD", "ETH-BTC"},
-		},
-		state:       WS_CONNECTING,
-		subscribers: make([]consumers.Consumer, 0),
+	suite.config = &entity.Config{
+		URL:        DefaultCoinbaseRateFeedWebsocketURL,
+		Capacity:   200,
+		Channels:   []string{DefaultCoinbaseRateFeedChannel},
+		ProductIDs: []string{"BTC-USD", "ETH-USD", "ETH-BTC"},
 	}
 }
 
@@ -60,19 +50,21 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorError() {
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorOk() {
-	_, err := NewCoinbaseRateFeed(suite.wg, &entity.Config{
-		URL:        DefaultCoinbaseRateFeedWebsocketURL,
-		Capacity:   200,
-		Channels:   []string{DefaultCoinbaseRateFeedChannel},
-		ProductIDs: []string{"BTC-USD"},
-	})
+	_, err := NewCoinbaseRateFeed(suite.wg, suite.config)
 	assert.NoError(suite.T(), err)
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_RegisterConsumerOk() {
 	consumer := new(mockConsumers.Consumer)
-	suite.client.RegisterMatchConsumer(consumer)
-	assert.Len(suite.T(), suite.client.subscribers, 1)
+	client := &coinbaseRateFeed{
+		wg:          suite.wg,
+		wsm:         NewWebSocket(DefaultCoinbaseRateFeedWebsocketURL, http.Header{}),
+		config:      suite.config,
+		state:       WS_CONNECTING,
+		subscribers: make([]consumers.Consumer, 0),
+	}
+	client.RegisterMatchConsumer(consumer)
+	assert.Len(suite.T(), client.subscribers, 1)
 }
 
 type Helloer struct {
@@ -125,13 +117,13 @@ func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 type Hook struct {
 	Entries []log.Entry
 	mu      sync.RWMutex
-	suite   *CoinbaseRateFeedSuite
+	client  CoinbaseRateFeedInterface
 }
 
 func (m *Hook) Fire(e *log.Entry) error {
-	if m.suite != nil {
-		m.suite.client.Stop()
-		m.suite = nil
+	if m.client != nil {
+		m.client.Stop()
+		m.client = nil
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -172,7 +164,9 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	suite.client.wsm.url = URL
+	suite.config.URL = URL
+	client, err := NewCoinbaseRateFeed(suite.wg, suite.config)
+	assert.NoError(suite.T(), err)
 	suite.T().Logf("Server URL: %v", URL)
 	consumer := new(mockConsumers.Consumer)
 	consumer.On("Consume", mock.Anything).Return(func(msg interface{}) error {
@@ -180,13 +174,13 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 		assert.EqualValues(suite.T(), "0.0234701", message.Size)
 		assert.EqualValues(suite.T(), "41801.67", message.Price)
 
-		suite.client.Stop()
+		client.Stop()
 
 		return consumers.ErrBadMatchMessage
 	})
-	suite.client.RegisterMatchConsumer(consumer)
+	client.RegisterMatchConsumer(consumer)
 
-	suite.client.Run()
+	client.Run()
 
 	suite.wg.Wait()
 
@@ -219,9 +213,7 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Error() {
 			expected: "Unable to unmarshal message to appropriate structure",
 		},
 	}
-	hook := &Hook{
-		suite: suite,
-	}
+	hook := new(Hook)
 	log.AddHook(hook)
 	for _, test := range tests {
 		var buf bytes.Buffer
@@ -231,11 +223,14 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Error() {
 		defer srv.Close()
 
 		URL := httpToWs(srv.URL)
-		suite.client.wsm.url = URL
+		suite.config.URL = URL
+		client, err := NewCoinbaseRateFeed(suite.wg, suite.config)
+		hook.client = client
+		assert.NoError(suite.T(), err)
 		suite.T().Logf("Server URL: %v", URL)
 		suite.T().Logf("Test message: %v", test.message)
 
-		suite.client.Run()
+		client.Run()
 
 		suite.wg.Wait()
 
@@ -243,8 +238,23 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Error() {
 		assert.EqualValues(suite.T(), test.expected, hook.Entries[0].Message)
 
 		srv.Close()
-		hook.suite = suite
-		suite.ReinitClient()
 		hook.Reset()
 	}
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_EchoFeed() {
+	srv := httptest.NewServer(NewEchoer(suite.T()))
+	defer srv.Close()
+
+	URL := httpToWs(srv.URL)
+	suite.config.URL = URL
+	client, err := NewCoinbaseRateFeed(suite.wg, suite.config)
+	assert.NoError(suite.T(), err)
+	suite.T().Logf("Server URL: %v", URL)
+
+	client.Run()
+
+	suite.wg.Wait()
+
+	srv.Close()
 }

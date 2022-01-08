@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"container/list"
 	"encoding/json"
 	"strconv"
 	"testing"
@@ -191,4 +192,52 @@ func (suite *MatchUseCaseSuite) Test_MatchUseCase_UpdateVWAP_GetVWAPError() {
 	})
 	assert.Error(suite.T(), err)
 	assert.ErrorIs(suite.T(), repository.ErrTradingPairNotFound, err)
+}
+
+func (suite *MatchUseCaseSuite) calcVWAP(history *list.List) float64 {
+	var numerator float64
+	var denominator float64
+
+	for e := history.Front(); e != nil; e = e.Next() {
+		deal := e.Value.(*entity.Deal)
+		numerator += deal.Volume * deal.Price
+		denominator += deal.Volume
+	}
+
+	return numerator / denominator
+}
+
+// Test_MatchUseCase_UpdateVWAP_Ok – happy path test
+func (suite *MatchUseCaseSuite) Test_MatchUseCase_UpdateVWAP_Ok() {
+	initialPrice := 4000
+	initialVolume := 1
+	priceStep := 20
+	volumeStep := 1
+	history := list.New()
+	for i := 0; i < suite.config.Capacity+50; i++ {
+		volume := float64(initialVolume + i*volumeStep)
+		price := float64(initialPrice + i*priceStep)
+		history.PushBack(&entity.Deal{
+			Volume: volume,
+			Price:  price,
+		})
+		for history.Len() > suite.config.Capacity {
+			element := history.Front()
+			history.Remove(element)
+		}
+		suite.vwapProducer.On("Send", mock.Anything).Return(func(msg *entity.VWAP) error {
+			vwap := suite.calcVWAP(history)
+
+			assert.EqualValues(suite.T(), vwap, msg.VWAP)
+			assert.EqualValues(suite.T(), "ETH-USD", msg.ProductID)
+
+			return nil
+		}).Once()
+		err := suite.useCase.Match().UpdateVWAP(&entity.Match{
+			Size:      strconv.FormatFloat(volume, 'E', -1, 32),
+			Price:     strconv.FormatFloat(price, 'E', -1, 32),
+			ProductID: "ETH-USD",
+		})
+		assert.NoError(suite.T(), err)
+	}
 }

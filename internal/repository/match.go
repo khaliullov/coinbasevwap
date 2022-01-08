@@ -17,8 +17,8 @@ type MatchRepository interface {
 
 // MatchStorage – storage for storing history of transactions and temporary sums for calculating VWAP
 type MatchStorage struct {
-	VolumeSum      float32
-	VolumePriceSum float32
+	VolumeSum      float64
+	VolumePriceSum float64
 	Deals          *list.List
 }
 

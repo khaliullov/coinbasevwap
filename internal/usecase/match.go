@@ -45,8 +45,8 @@ func (m *matchUseCase) UpdateVWAP(match *entity.Match) error {
 		return err
 	}
 	deal := entity.Deal{
-		Volume: float32(volume),
-		Price:  float32(price),
+		Volume: volume,
+		Price:  price,
 	}
 
 	if deal.Volume <= 0 || deal.Price <= 0 {

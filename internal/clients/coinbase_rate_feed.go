@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/mitchellh/mapstructure"
 	log "github.com/sirupsen/logrus"
@@ -26,6 +27,9 @@ const (
 )
 
 var (
+	// CommandTimeout – maximum timeout for waiting for the command response
+	CommandTimeout = 500 * time.Millisecond
+
 	// ErrBadConfiguration – wrong configuration of service
 	ErrBadConfiguration = errors.New("bad configuration")
 	// ErrDisconnected – disconnected from Coinbase rate feed WebSocket
@@ -46,11 +50,12 @@ type CoinbaseRateFeedInterface interface {
 }
 
 type coinbaseRateFeed struct {
-	wg          *sync.WaitGroup
-	wsm         *WSMachine
-	config      *entity.Config
-	state       WSState
-	subscribers []consumers.Consumer
+	wg           *sync.WaitGroup
+	wsm          *WSMachine
+	config       *entity.Config
+	state        WSState
+	subscribers  []consumers.Consumer
+	cmdTimeoutCh chan bool
 }
 
 // NewCoinbaseRateFeed – create WebSocket client for Coinbase rate feed
@@ -60,11 +65,12 @@ func NewCoinbaseRateFeed(wg *sync.WaitGroup, config *entity.Config) (CoinbaseRat
 	}
 
 	res := &coinbaseRateFeed{
-		wg:          wg,
-		wsm:         NewWebSocket(config.URL, http.Header{}),
-		config:      config,
-		state:       WS_CONNECTING,
-		subscribers: make([]consumers.Consumer, 0),
+		wg:           wg,
+		wsm:          NewWebSocket(config.URL, http.Header{}),
+		config:       config,
+		state:        WS_CONNECTING,
+		subscribers:  make([]consumers.Consumer, 0),
+		cmdTimeoutCh: make(chan bool, 2),
 	}
 
 	return res, nil
@@ -95,12 +101,32 @@ func (m *coinbaseRateFeed) useTextProtocol(command chan<- WSCommand) {
 	command <- WS_USE_TEXT
 }
 
+func (m *coinbaseRateFeed) subscriptionTimeout() {
+	log.Debug("subscriptionTimeout has started")
+
+	timer := time.NewTimer(CommandTimeout)
+
+	for {
+		select {
+		case <-m.cmdTimeoutCh: // closed or success
+			timer.Stop()
+			return
+		case <-timer.C:
+			log.Error("Failed to change subscription")
+			cmdCh := m.wsm.Command()
+			cmdCh <- WS_QUIT
+			return
+		}
+	}
+}
+
 func (m *coinbaseRateFeed) changeSubscription(output chan<- []byte, command string) {
 	msg, _ := json.Marshal(entity.SubscriptionRequest{
 		Type:       command,
 		Channels:   m.config.Channels,
 		ProductIds: m.config.ProductIDs,
 	})
+	go m.subscriptionTimeout()
 	output <- msg
 }
 
@@ -177,6 +203,7 @@ func (m *coinbaseRateFeed) processMessage(command chan<- WSCommand, msg []byte) 
 	case *entity.Match:
 		m.publishMatchMessage(packet)
 	case *entity.Subscription:
+		m.cmdTimeoutCh <- true
 		log.WithFields(log.Fields{
 			"type":   "Subscription",
 			"packet": packet,
