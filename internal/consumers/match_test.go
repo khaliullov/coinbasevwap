@@ -1,8 +1,11 @@
 package consumers
 
 import (
+	"bytes"
+	"io"
 	"testing"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -18,6 +21,8 @@ type MatchConsumerSuite struct {
 	matchUseCase *usecase.MatchUseCase
 	useCase      *usecase.UseCase
 	consumer     Consumer
+	logBuffer    bytes.Buffer
+	oldOutput    io.Writer
 }
 
 func TestMatchConsumerSuite(t *testing.T) {
@@ -25,6 +30,8 @@ func TestMatchConsumerSuite(t *testing.T) {
 }
 
 func (suite *MatchConsumerSuite) SetupTest() {
+	suite.oldOutput = log.StandardLogger().Out
+	log.SetOutput(&suite.logBuffer)
 	suite.config = &entity.Config{
 		URL:        "https://test.org",
 		Capacity:   200,
@@ -38,7 +45,7 @@ func (suite *MatchConsumerSuite) SetupTest() {
 }
 
 func (suite *MatchConsumerSuite) TearDownTest() {
-
+	log.SetOutput(suite.oldOutput)
 }
 
 func (suite *MatchConsumerSuite) Test_Consume_CastError() {

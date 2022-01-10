@@ -5,6 +5,7 @@ import (
 	"os"
 	"testing"
 
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 
@@ -31,7 +32,7 @@ func (suite *VWAPProducerSuite) TearDownTest() {
 func (suite *VWAPProducerSuite) Test_VWAPProducer_Ok() {
 	reader, writer, err := os.Pipe()
 	if err != nil {
-		panic(err)
+		log.WithField("error", err).Fatal("Failed to create STDOUT mock")
 	}
 	rescueStdout := os.Stdout
 	defer func() {

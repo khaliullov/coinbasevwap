@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
 	log "github.com/sirupsen/logrus"
@@ -21,8 +22,9 @@ import (
 
 type CoinbaseRateFeedSuite struct {
 	suite.Suite
-	wg     *sync.WaitGroup
-	config *entity.Config
+	wg        *sync.WaitGroup
+	logBuffer bytes.Buffer
+	oldOutput io.Writer
 }
 
 func TestCoinbaseRateFeedSuite(t *testing.T) {
@@ -30,9 +32,14 @@ func TestCoinbaseRateFeedSuite(t *testing.T) {
 }
 
 func (suite *CoinbaseRateFeedSuite) SetupTest() {
+	suite.oldOutput = log.StandardLogger().Out
+	log.SetOutput(&suite.logBuffer)
 	suite.wg = new(sync.WaitGroup)
-	suite.config = &entity.Config{
-		URL:        DefaultCoinbaseRateFeedWebsocketURL,
+}
+
+func (suite *CoinbaseRateFeedSuite) getConfig(url string) *entity.Config {
+	return &entity.Config{
+		URL:        url,
 		Capacity:   200,
 		Channels:   []string{DefaultCoinbaseRateFeedChannel},
 		ProductIDs: []string{"BTC-USD", "ETH-USD", "ETH-BTC"},
@@ -40,7 +47,7 @@ func (suite *CoinbaseRateFeedSuite) SetupTest() {
 }
 
 func (suite *CoinbaseRateFeedSuite) TearDownTest() {
-
+	log.SetOutput(suite.oldOutput)
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorError() {
@@ -50,7 +57,7 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorError() {
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorOk() {
-	_, err := NewCoinbaseRateFeed(suite.wg, suite.config)
+	_, err := NewCoinbaseRateFeed(suite.wg, suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL))
 	assert.NoError(suite.T(), err)
 }
 
@@ -59,7 +66,7 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_RegisterConsumerOk() {
 	client := &coinbaseRateFeed{
 		wg:          suite.wg,
 		wsm:         NewWebSocket(DefaultCoinbaseRateFeedWebsocketURL, http.Header{}),
-		config:      suite.config,
+		config:      suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL),
 		state:       WS_CONNECTING,
 		subscribers: make([]consumers.Consumer, 0),
 	}
@@ -68,21 +75,75 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_RegisterConsumerOk() {
 }
 
 type Helloer struct {
-	test   *testing.T
-	buffer []string
+	buffer                  []string
+	subscribeDelay          time.Duration
+	unsubscribeDelay        time.Duration
+	sendSubscribeResponse   bool
+	sendUnsubscribeResponse bool
+	disconnectOnMessageType string
+	callbackCh              chan bool
 }
 
-func NewHelloer(t *testing.T, message string) *Helloer {
-	return &Helloer{
-		test:   t,
-		buffer: []string{message},
+type HelloerOption func(m *Helloer)
+
+func WithSubscribeDelay(duration time.Duration) HelloerOption {
+	return func(m *Helloer) {
+		m.subscribeDelay = duration
 	}
+}
+
+func WithUnsubscribeDelay(duration time.Duration) HelloerOption {
+	return func(m *Helloer) {
+		m.unsubscribeDelay = duration
+	}
+}
+
+func WithDoNotSendSubscribeResponse() HelloerOption {
+	return func(m *Helloer) {
+		m.sendSubscribeResponse = false
+	}
+}
+
+func WithDoNotSendUnsubscribeResponse() HelloerOption {
+	return func(m *Helloer) {
+		m.sendUnsubscribeResponse = false
+	}
+}
+
+func WithDisconnectOnMessageType(msgType string) HelloerOption {
+	return func(m *Helloer) {
+		m.disconnectOnMessageType = msgType
+	}
+}
+
+func WithMessage(message string) HelloerOption {
+	return func(m *Helloer) {
+		m.buffer = append(m.buffer, message)
+	}
+}
+
+func NewHelloer(opts ...HelloerOption) *Helloer {
+	res := &Helloer{
+		buffer:                  []string{},
+		subscribeDelay:          0,
+		unsubscribeDelay:        0,
+		sendSubscribeResponse:   true,
+		sendUnsubscribeResponse: true,
+		disconnectOnMessageType: "",
+		callbackCh:              make(chan bool, 2),
+	}
+
+	for _, opt := range opts {
+		opt(res)
+	}
+
+	return res
 }
 
 func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 	ws, err := upgrader.Upgrade(ans, req, nil)
 	if err != nil {
-		m.test.Errorf("HTTP upgrade error: %v", err)
+		log.WithField("error", err).Error("HTTP upgrade error")
 		return
 	}
 	defer ws.Close()
@@ -90,26 +151,34 @@ func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 		_, p, err := ws.ReadMessage()
 		if err != nil {
 			if err != io.EOF {
-				m.test.Logf("Helloer: ReadMessage error: %v", err)
+				log.WithField("error", err).Error("Helloer: ReadMessage error")
 			}
 			return
 		}
-		m.test.Logf("Helloer: read: %v", string(p))
+		log.WithField("messsage", string(p)).Debug("Helloer: read")
 		if bytes.Contains(p, []byte(`"type":"subscribe"`)) {
-			r := `{"type":"subscriptions","channels":[{"name":"matches","product_ids":["BTC-USD","ETH-USD","ETH-BTC"]}]}`
-			m.buffer = append([]string{r + "\n"}, m.buffer...)
+			if m.disconnectOnMessageType == "subscribe" {
+				m.callbackCh <- true
+			} else {
+				r := `{"type":"subscriptions","channels":[{"name":"matches","product_ids":["BTC-USD","ETH-USD","ETH-BTC"]}]}`
+				m.buffer = append([]string{r + "\n"}, m.buffer...)
+			}
 		}
 		if bytes.Contains(p, []byte(`"type":"unsubscribe"`)) {
-			m.buffer = append([]string{`{"type":"subscriptions","channels":[]}` + "\n"}, m.buffer...)
+			if m.disconnectOnMessageType == "unsubscribe" {
+				m.callbackCh <- true
+			} else {
+				m.buffer = append([]string{`{"type":"subscriptions","channels":[]}` + "\n"}, m.buffer...)
+			}
 		}
 		for len(m.buffer) > 0 {
 			var msg string
 			msg, m.buffer = m.buffer[0], m.buffer[1:]
 			if err := ws.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
-				m.test.Logf("Helloer: WriteMessage error: %v", err)
+				log.WithField("error", err).Error("Helloer: WriteMessage error")
 				return
 			}
-			m.test.Logf("Helloer: send: %v", msg)
+			log.WithField("message", msg).Debug("Helloer: send")
 		}
 	}
 }
@@ -144,9 +213,6 @@ func (m *Hook) Reset() {
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
-	var buf bytes.Buffer
-	log.SetOutput(&buf)
-
 	testMessage := `{
 		"type": "match",
  		"trade_id": 260823760,
@@ -160,14 +226,14 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 		"time":	"2022-01-07T19:54:43.295378Z"
 	}
 `
-	srv := httptest.NewServer(NewHelloer(suite.T(), testMessage))
+	srv := httptest.NewServer(NewHelloer(WithMessage(testMessage)))
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	suite.config.URL = URL
-	client, err := NewCoinbaseRateFeed(suite.wg, suite.config)
+	config := suite.getConfig(URL)
+	client, err := NewCoinbaseRateFeed(suite.wg, config)
 	assert.NoError(suite.T(), err)
-	suite.T().Logf("Server URL: %v", URL)
+	log.WithField("URL", URL).Debug("set server URL")
 	consumer := new(mockConsumers.Consumer)
 	consumer.On("Consume", mock.Anything).Return(func(msg interface{}) error {
 		message, _ := msg.(*entity.Match)
@@ -216,19 +282,16 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Error() {
 	hook := new(Hook)
 	log.AddHook(hook)
 	for _, test := range tests {
-		var buf bytes.Buffer
-		log.SetOutput(&buf)
-
-		srv := httptest.NewServer(NewHelloer(suite.T(), test.message))
+		srv := httptest.NewServer(NewHelloer(WithMessage(test.message)))
 		defer srv.Close()
 
 		URL := httpToWs(srv.URL)
-		suite.config.URL = URL
-		client, err := NewCoinbaseRateFeed(suite.wg, suite.config)
+		config := suite.getConfig(URL)
+		client, err := NewCoinbaseRateFeed(suite.wg, config)
 		hook.client = client
 		assert.NoError(suite.T(), err)
-		suite.T().Logf("Server URL: %v", URL)
-		suite.T().Logf("Test message: %v", test.message)
+		log.WithField("URL", URL).Debug("set server URL")
+		log.WithField("message", test.message).Debug("test message")
 
 		client.Run()
 
@@ -243,18 +306,52 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Error() {
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_EchoFeed() {
-	srv := httptest.NewServer(NewEchoer(suite.T()))
+	srv := httptest.NewServer(NewEchoer())
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	suite.config.URL = URL
-	client, err := NewCoinbaseRateFeed(suite.wg, suite.config)
+	config := suite.getConfig(URL)
+	client, err := NewCoinbaseRateFeed(suite.wg, config)
 	assert.NoError(suite.T(), err)
-	suite.T().Logf("Server URL: %v", URL)
+	log.WithField("URL", URL).Debug("set server URL")
 
 	client.Run()
 
 	suite.wg.Wait()
 
 	srv.Close()
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ResponseTimeoutError() {
+	for _, messageType := range []string{"subscribe", "unsubscribe"} {
+		helloer := NewHelloer(WithDisconnectOnMessageType(messageType))
+		srv := httptest.NewServer(helloer)
+		defer srv.Close()
+
+		URL := httpToWs(srv.URL)
+		config := suite.getConfig(URL)
+		hook := new(Hook)
+		log.AddHook(hook)
+		client, err := NewCoinbaseRateFeed(suite.wg, config)
+		assert.NoError(suite.T(), err)
+		hook.client = client
+		log.WithField("URL", URL).Debug("set server URL")
+
+		client.Run()
+
+		for {
+			if <-helloer.callbackCh {
+				srv.Listener.Close()
+				srv.Close()
+				break
+			}
+		}
+
+		suite.wg.Wait()
+
+		assert.True(suite.T(), len(hook.Entries) > 0)
+		assert.EqualValues(suite.T(), "Failed to change subscription", hook.Entries[0].Message)
+
+		srv.Close()
+	}
 }

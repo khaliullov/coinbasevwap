@@ -20,10 +20,7 @@ func newVWAP() VWAP {
 }
 
 func (m *vwap) Send(msg *entity.VWAP) error {
-	payload, err := json.Marshal(msg)
-	if err != nil {
-		return err
-	}
+	payload, _ := json.Marshal(msg)
 
 	fmt.Println(string(payload))
 

@@ -10,30 +10,30 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
 
 type WebSocketSuite struct {
 	suite.Suite
+	logBuffer bytes.Buffer
+	oldOutput io.Writer
 }
 
 type Echoer struct {
-	test *testing.T
 }
 
 var upgrader = websocket.Upgrader{} // use default options
 
-func NewEchoer(t *testing.T) *Echoer {
-	return &Echoer{
-		test: t,
-	}
+func NewEchoer() *Echoer {
+	return new(Echoer)
 }
 
 func (e *Echoer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 	ws, err := upgrader.Upgrade(ans, req, nil)
 	if err != nil {
-		e.test.Errorf("HTTP upgrade error: %v", err)
+		log.WithField("error", err).Error("HTTP upgrade error")
 		return
 	}
 	defer ws.Close()
@@ -41,16 +41,16 @@ func (e *Echoer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 		mt, p, err := ws.ReadMessage()
 		if err != nil {
 			if err != io.EOF {
-				e.test.Logf("Echoer: ReadMessage error: %v", err)
+				log.WithField("error", err).Error("Echoer: ReadMessage error")
 			}
 			return
 		}
 		if bytes.Equal(p, []byte("/CLOSE")) {
-			e.test.Logf("Echoer: closing connection by client request")
+			log.Debug("Echoer: closing connection by client request")
 			return
 		}
 		if err := ws.WriteMessage(mt, p); err != nil {
-			e.test.Logf("Echoer: WriteMessage error: %v", err)
+			log.WithField("error", err).Error("Echoer: WriteMessage error")
 			return
 		}
 	}
@@ -65,11 +65,20 @@ func TestWebSocketSuite(t *testing.T) {
 }
 
 func (suite *WebSocketSuite) SetupTest() {
-
+	suite.oldOutput = log.StandardLogger().Out
+	log.SetOutput(&suite.logBuffer)
 }
 
 func (suite *WebSocketSuite) TearDownTest() {
+	log.SetOutput(suite.oldOutput)
+}
 
+func (suite *WebSocketSuite) wrongState(expected, state WSState, err error) {
+	log.WithFields(log.Fields{
+		"expectedState": expected,
+		"state":         state,
+		"error":         err,
+	}).Error("wrong state")
 }
 
 func (suite *WebSocketSuite) TestBadURL() {
@@ -87,31 +96,31 @@ func (suite *WebSocketSuite) TestBadURL() {
 
 	st := <-stsCh
 	if st.State != WS_CONNECTING {
-		suite.T().Errorf("st.State is %v, expected CONNECTING (%v). st.Error is %v", st.State, WS_CONNECTING, st.Error)
+		suite.wrongState(WS_CONNECTING, st.State, st.Error)
 	}
 	st = <-stsCh
 	if st.State != WS_DISCONNECTED {
-		suite.T().Errorf("st.State is %v, expected DISCONNECTED (%v). st.Error is %v", st.State, WS_DISCONNECTED, st.Error)
+		suite.wrongState(WS_DISCONNECTED, st.State, st.Error)
 	}
 	st = <-stsCh
 	if st.State != WS_WAITING {
-		suite.T().Errorf("st.State is %v, expected WAITING (%v). st.Error is %v", st.State, WS_WAITING, st.Error)
+		suite.wrongState(WS_WAITING, st.State, st.Error)
 	}
 
 	cmdCh <- WS_QUIT
 
 	st = <-stsCh
 	if st.State != WS_DISCONNECTED {
-		suite.T().Errorf("st.State is %v, expected DISCONNECTED (%v). st.Error is %v", st.State, WS_DISCONNECTED, st.Error)
+		suite.wrongState(WS_DISCONNECTED, st.State, st.Error)
 	}
 }
 
 func (suite *WebSocketSuite) TestConnect() {
-	srv := httptest.NewServer(NewEchoer(suite.T()))
+	srv := httptest.NewServer(NewEchoer())
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	suite.T().Logf("Server URL: %v", URL)
+	log.WithField("URL", URL).Debug("set server URL")
 
 	ws := NewWebSocket(URL, http.Header{})
 
@@ -124,11 +133,11 @@ func (suite *WebSocketSuite) TestConnect() {
 
 	st := <-stsCh
 	if st.State != WS_CONNECTING {
-		suite.T().Errorf("st.State is %v, expected CONNECTING (%v). st.Error is %v", st.State, WS_CONNECTING, st.Error)
+		suite.wrongState(WS_CONNECTING, st.State, st.Error)
 	}
 	st = <-stsCh
 	if st.State != WS_CONNECTED {
-		suite.T().Errorf("st.State is %v, expected CONNECTED (%v). st.Error is %v", st.State, WS_CONNECTED, st.Error)
+		suite.wrongState(WS_CONNECTED, st.State, st.Error)
 	}
 
 	// cleanup
@@ -136,18 +145,18 @@ func (suite *WebSocketSuite) TestConnect() {
 
 	st = <-stsCh
 	if st.State != WS_DISCONNECTED {
-		suite.T().Errorf("st.State is %v, expected DISCONNECTED (%v). st.Error is %v", st.State, WS_DISCONNECTED, st.Error)
+		suite.wrongState(WS_DISCONNECTED, st.State, st.Error)
 	}
 
 	srv.Close()
 }
 
 func (suite *WebSocketSuite) TestReconnect() {
-	srv := httptest.NewServer(NewEchoer(suite.T()))
+	srv := httptest.NewServer(NewEchoer())
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	suite.T().Logf("Server URL: %v", URL)
+	log.WithField("URL", URL).Debug("set server URL")
 
 	ws := NewWebSocket(URL, http.Header{})
 
@@ -160,10 +169,10 @@ func (suite *WebSocketSuite) TestReconnect() {
 	cmdCh := ws.Command()
 
 	if st := <-stsCh; st.State != WS_CONNECTING {
-		suite.T().Errorf("st.State is %v, extected CONNECTING", st.State)
+		suite.wrongState(WS_CONNECTING, st.State, st.Error)
 	}
 	if st := <-stsCh; st.State != WS_CONNECTED {
-		suite.T().Errorf("st.State is %v, extected CONNECTED", st.State)
+		suite.wrongState(WS_CONNECTED, st.State, st.Error)
 	}
 
 	// server unexpectedly closes our connection
@@ -173,12 +182,11 @@ func (suite *WebSocketSuite) TestReconnect() {
 	for _, state := range []WSState{WS_DISCONNECTED, WS_CONNECTING, WS_CONNECTED} {
 		select {
 		case st := <-stsCh:
-			suite.T().Log(state)
 			if st.State != state {
-				suite.T().Errorf("st.State is %v, expected %v. st.Error is %v", st.State, state, st.Error)
+				suite.wrongState(state, st.State, st.Error)
 			}
 		case <-time.After(200 * time.Millisecond):
-			suite.T().Errorf("WSChan has not changed state in time, expected %v", state)
+			log.WithField("expectedState", state).Error("WSChan has not changed state in time, expected")
 		}
 	}
 
@@ -188,11 +196,11 @@ func (suite *WebSocketSuite) TestReconnect() {
 }
 
 func (suite *WebSocketSuite) TestServerDisappear() {
-	srv := httptest.NewServer(NewEchoer(suite.T()))
+	srv := httptest.NewServer(NewEchoer())
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	suite.T().Logf("Server URL: %v", URL)
+	log.WithField("URL", URL).Debug("set server URL")
 
 	ws := NewWebSocket(URL, http.Header{})
 
@@ -205,10 +213,10 @@ func (suite *WebSocketSuite) TestServerDisappear() {
 	cmdCh := ws.Command()
 
 	if st := <-stsCh; st.State != WS_CONNECTING {
-		suite.T().Errorf("st.State is %v, extected CONNECTING", st.State)
+		suite.wrongState(WS_CONNECTING, st.State, st.Error)
 	}
 	if st := <-stsCh; st.State != WS_CONNECTED {
-		suite.T().Errorf("st.State is %v, extected CONNECTED", st.State)
+		suite.wrongState(WS_CONNECTED, st.State, st.Error)
 	}
 
 	// server unexpectedly disappear
@@ -220,12 +228,11 @@ func (suite *WebSocketSuite) TestServerDisappear() {
 	for _, state := range []WSState{WS_DISCONNECTED, WS_CONNECTING, WS_DISCONNECTED, WS_WAITING} {
 		select {
 		case st := <-stsCh:
-			suite.T().Log(state)
 			if st.State != state {
-				suite.T().Errorf("st.State is %v, expected %v. st.Error is %v", st.State, state, st.Error)
+				suite.wrongState(state, st.State, st.Error)
 			}
 		case <-time.After(200 * time.Millisecond):
-			suite.T().Errorf("WSChan has not changed state in time, expected %v", state)
+			log.WithField("expectedState", state).Error("WSChan has not changed state in time, expected")
 		}
 	}
 
@@ -235,11 +242,11 @@ func (suite *WebSocketSuite) TestServerDisappear() {
 }
 
 func (suite *WebSocketSuite) TestEcho() {
-	srv := httptest.NewServer(NewEchoer(suite.T()))
+	srv := httptest.NewServer(NewEchoer())
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	suite.T().Logf("Server URL: %v", URL)
+	log.WithField("URL", URL).Debug("set server URL")
 
 	ws := NewWebSocket(URL, http.Header{})
 
@@ -257,22 +264,25 @@ func (suite *WebSocketSuite) TestEcho() {
 	outCh <- orig
 
 	if st := <-stsCh; st.State != WS_CONNECTING {
-		suite.T().Errorf("st.State is %v, extected CONNECTING", st.State)
+		suite.wrongState(WS_CONNECTING, st.State, st.Error)
 	}
 	if st := <-stsCh; st.State != WS_CONNECTED {
-		suite.T().Errorf("st.State is %v, extected CONNECTED", st.State)
+		suite.wrongState(WS_CONNECTED, st.State, st.Error)
 	}
 
 	// wait for an answer
 	select {
 	case msg, ok := <-inpCh:
 		if !ok {
-			suite.T().Error("ws.Input unexpectedly closed")
+			log.Error("ws.Input unexpectedly closed")
 		} else if !bytes.Equal(msg, orig) {
-			suite.T().Errorf("echo message mismatch: %v != %v", msg, orig)
+			log.WithFields(log.Fields{
+				"expectedMsg": string(orig),
+				"receivedMsg": string(msg),
+			}).Error("echo message mismatch")
 		}
 	case <-time.After(100 * time.Millisecond):
-		suite.T().Error("Timeout when waiting for an echo message")
+		log.Error("Timeout when waiting for an echo message")
 	}
 
 	// cleanup
@@ -280,4 +290,20 @@ func (suite *WebSocketSuite) TestEcho() {
 
 	<-stsCh // DISCONNECTED
 	srv.Close()
+}
+
+func (suite *WebSocketSuite) TestStrings() {
+	var testState WSState = 12
+	assert.Equal(suite.T(), "UNKNOWN STATUS 12", testState.String())
+
+	for _, state := range []WSState{WS_CONNECTING, WS_CONNECTED, WS_DISCONNECTED, WS_WAITING} {
+		assert.NotContains(suite.T(), state.String(), "UNKNOWN")
+	}
+
+	var testCommand WSCommand = 12
+	assert.Equal(suite.T(), "UNKNOWN COMMAND 12", testCommand.String())
+
+	for _, command := range []WSCommand{WS_PING, WS_QUIT, WS_USE_BINARY, WS_USE_TEXT} {
+		assert.NotContains(suite.T(), command.String(), "UNKNOWN")
+	}
 }
