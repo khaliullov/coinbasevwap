@@ -261,58 +261,94 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 	srv.Close()
 }
 
-func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Error() {
-	tests := []struct {
-		message  string
-		expected string
-	}{
-		{
-			message:  "Test\n",
-			expected: "Failed to parse message JSON",
-		},
-		{
-			message:  "{\"success\": true}\n",
-			expected: "Skipping message with unknown type",
-		},
-		{
-			message:  "{\"type\": true}",
-			expected: "Failed to get type",
-		},
-		{
-			message:  "{\"type\": \"test\"}",
-			expected: "Skipping message with unknown type",
-		},
-		{
-			message:  "{\"type\": \"match\", \"size\": 0.01}",
-			expected: "Unable to unmarshal message to appropriate structure",
-		},
-	}
+func (suite *CoinbaseRateFeedSuite) runServerTest(expectedError string, withCallback bool, opts ...HelloerOption) {
+	helloer := NewHelloer(opts...)
+	srv := httptest.NewServer(helloer)
+	defer srv.Close()
+
+	<-time.After(500 * time.Millisecond) // wait to server start
+
+	URL := httpToWs(srv.URL)
+	config := suite.getConfig(URL)
 	hook := new(Hook)
 	log.AddHook(hook)
-	for _, test := range tests {
-		srv := httptest.NewServer(NewHelloer(WithMessage(test.message)))
-		defer srv.Close()
+	client, err := NewCoinbaseRateFeed(suite.wg, config)
+	assert.NoError(suite.T(), err)
+	hook.client = client
+	log.WithField("URL", URL).Debug("set server URL")
 
-		<-time.After(500 * time.Millisecond) // wait to server start
+	client.Run()
 
-		URL := httpToWs(srv.URL)
-		config := suite.getConfig(URL)
-		client, err := NewCoinbaseRateFeed(suite.wg, config)
-		hook.client = client
-		assert.NoError(suite.T(), err)
-		log.WithField("URL", URL).Debug("set server URL")
-		log.WithField("message", test.message).Debug("test message")
-
-		client.Run()
-
-		suite.wg.Wait()
-
-		assert.True(suite.T(), len(hook.Entries) > 0)
-		assert.EqualValues(suite.T(), test.expected, hook.Entries[0].Message)
-
-		srv.Close()
-		hook.Reset()
+	if withCallback {
+		for {
+			if <-helloer.callbackCh {
+				srv.Listener.Close()
+				srv.Close()
+				break
+			}
+		}
 	}
+
+	suite.wg.Wait()
+
+	assert.True(suite.T(), len(hook.Entries) > 0)
+	assert.EqualValues(suite.T(), expectedError, hook.Entries[0].Message)
+
+	srv.Close()
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_BadMessage() {
+	suite.runServerTest("Failed to parse message JSON", false, WithMessage("Test\n"))
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_BadJSONMessage() {
+	suite.runServerTest("Skipping message with unknown type", false,
+		WithMessage("{\"success\": true}\n"))
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_BadTypeMessage() {
+	suite.runServerTest("Failed to get type", false,
+		WithMessage("{\"type\": true}"))
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_UnknownTypeMessage() {
+	suite.runServerTest("Skipping message with unknown type", false,
+		WithMessage("{\"type\": \"test\"}"))
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_IncorrectMessage() {
+	suite.runServerTest("Unable to unmarshal message to appropriate structure", false,
+		WithMessage("{\"type\": \"match\", \"size\": 0.01}"))
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_DisconnectOnSubscribe() {
+	suite.runServerTest("Failed to change subscription", true,
+		WithDisconnectOnMessageType("subscribe"))
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_DisconnectOnUnsubscribe() {
+	suite.runServerTest("Failed to change subscription", true,
+		WithDisconnectOnMessageType("unsubscribe"))
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_DelayedSubscribeResponse() {
+	suite.runServerTest("Failed to change subscription", false,
+		WithSubscribeDelay(CommandTimeout+100*time.Millisecond))
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_DelayedUnsubscribeResponse() {
+	suite.runServerTest("Failed to change subscription", false,
+		WithUnsubscribeDelay(CommandTimeout+100*time.Millisecond))
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_NoSubscribeResponse() {
+	suite.runServerTest("Failed to change subscription", false,
+		WithDoNotSendSubscribeResponse())
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_NoUnsubscribeResponse() {
+	suite.runServerTest("Failed to change subscription", false,
+		WithDoNotSendUnsubscribeResponse())
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_EchoFeed() {
@@ -332,85 +368,4 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_EchoFeed() {
 	suite.wg.Wait()
 
 	srv.Close()
-}
-
-func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ServerErrors() {
-	tests := []struct {
-		Name          string
-		ExpectedError string
-		Opt           HelloerOption
-		WithCallback  bool
-	}{
-		{
-			Name:          "Test failing subscription",
-			ExpectedError: "Failed to change subscription",
-			Opt:           WithDisconnectOnMessageType("subscribe"),
-			WithCallback:  true,
-		},
-		{
-			Name:          "Test failing unsubscription",
-			ExpectedError: "Failed to change subscription",
-			Opt:           WithDisconnectOnMessageType("unsubscribe"),
-			WithCallback:  true,
-		},
-		{
-			Name:          "Test failing subscribe response timeout",
-			ExpectedError: "Failed to change subscription",
-			Opt:           WithSubscribeDelay(CommandTimeout + 100*time.Millisecond),
-			WithCallback:  false,
-		},
-		{
-			Name:          "Test failing unsubscribe response timeout",
-			ExpectedError: "Failed to change subscription",
-			Opt:           WithUnsubscribeDelay(CommandTimeout + 100*time.Millisecond),
-			WithCallback:  false,
-		},
-		{
-			Name:          "Test failing sending subscribe response",
-			ExpectedError: "Failed to change subscription",
-			Opt:           WithDoNotSendSubscribeResponse(),
-			WithCallback:  false,
-		},
-		{
-			Name:          "Test failing sending unsubscribe response",
-			ExpectedError: "Failed to change subscription",
-			Opt:           WithDoNotSendUnsubscribeResponse(),
-			WithCallback:  false,
-		},
-	}
-	for _, test := range tests {
-		helloer := NewHelloer(test.Opt)
-		srv := httptest.NewServer(helloer)
-		defer srv.Close()
-
-		<-time.After(500 * time.Millisecond) // wait to server start
-
-		URL := httpToWs(srv.URL)
-		config := suite.getConfig(URL)
-		hook := new(Hook)
-		log.AddHook(hook)
-		client, err := NewCoinbaseRateFeed(suite.wg, config)
-		assert.NoError(suite.T(), err)
-		hook.client = client
-		log.WithField("URL", URL).Debug("set server URL")
-
-		client.Run()
-
-		if test.WithCallback {
-			for {
-				if <-helloer.callbackCh {
-					srv.Listener.Close()
-					srv.Close()
-					break
-				}
-			}
-		}
-
-		suite.wg.Wait()
-
-		assert.True(suite.T(), len(hook.Entries) > 0)
-		assert.EqualValues(suite.T(), test.ExpectedError, hook.Entries[0].Message)
-
-		srv.Close()
-	}
 }
