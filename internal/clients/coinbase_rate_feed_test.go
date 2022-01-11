@@ -22,7 +22,6 @@ import (
 
 type CoinbaseRateFeedSuite struct {
 	suite.Suite
-	wg        *sync.WaitGroup
 	logBuffer bytes.Buffer
 	oldOutput io.Writer
 }
@@ -34,7 +33,6 @@ func TestCoinbaseRateFeedSuite(t *testing.T) {
 func (suite *CoinbaseRateFeedSuite) SetupTest() {
 	suite.oldOutput = log.StandardLogger().Out
 	log.SetOutput(&suite.logBuffer)
-	suite.wg = new(sync.WaitGroup)
 }
 
 func (suite *CoinbaseRateFeedSuite) getConfig(url string) *entity.Config {
@@ -51,20 +49,23 @@ func (suite *CoinbaseRateFeedSuite) TearDownTest() {
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorError() {
-	_, err := NewCoinbaseRateFeed(suite.wg, &entity.Config{})
+	wg := new(sync.WaitGroup)
+	_, err := NewCoinbaseRateFeed(wg, &entity.Config{})
 	assert.Error(suite.T(), err)
 	assert.ErrorIs(suite.T(), err, ErrBadConfiguration)
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorOk() {
-	_, err := NewCoinbaseRateFeed(suite.wg, suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL))
+	wg := new(sync.WaitGroup)
+	_, err := NewCoinbaseRateFeed(wg, suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL))
 	assert.NoError(suite.T(), err)
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_RegisterConsumerOk() {
+	wg := new(sync.WaitGroup)
 	consumer := new(mockConsumers.Consumer)
 	client := &coinbaseRateFeed{
-		wg:          suite.wg,
+		wg:          wg,
 		wsm:         NewWebSocket(DefaultCoinbaseRateFeedWebsocketURL, http.Header{}),
 		config:      suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL),
 		state:       WS_CONNECTING,
@@ -239,7 +240,8 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 
 	URL := httpToWs(srv.URL)
 	config := suite.getConfig(URL)
-	client, err := NewCoinbaseRateFeed(suite.wg, config)
+	wg := new(sync.WaitGroup)
+	client, err := NewCoinbaseRateFeed(wg, config)
 	assert.NoError(suite.T(), err)
 	log.WithField("URL", URL).Debug("set server URL")
 	consumer := new(mockConsumers.Consumer)
@@ -256,7 +258,7 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 
 	client.Run()
 
-	suite.wg.Wait()
+	wg.Wait()
 
 	srv.Close()
 }
@@ -272,7 +274,8 @@ func (suite *CoinbaseRateFeedSuite) runServerTest(expectedError string, withCall
 	config := suite.getConfig(URL)
 	hook := new(Hook)
 	log.AddHook(hook)
-	client, err := NewCoinbaseRateFeed(suite.wg, config)
+	wg := new(sync.WaitGroup)
+	client, err := NewCoinbaseRateFeed(wg, config)
 	assert.NoError(suite.T(), err)
 	hook.client = client
 	log.WithField("URL", URL).Debug("set server URL")
@@ -289,7 +292,7 @@ func (suite *CoinbaseRateFeedSuite) runServerTest(expectedError string, withCall
 		}
 	}
 
-	suite.wg.Wait()
+	wg.Wait()
 
 	assert.True(suite.T(), len(hook.Entries) > 0)
 	assert.EqualValues(suite.T(), expectedError, hook.Entries[0].Message)
@@ -359,13 +362,14 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_EchoFeed() {
 
 	URL := httpToWs(srv.URL)
 	config := suite.getConfig(URL)
-	client, err := NewCoinbaseRateFeed(suite.wg, config)
+	wg := new(sync.WaitGroup)
+	client, err := NewCoinbaseRateFeed(wg, config)
 	assert.NoError(suite.T(), err)
 	log.WithField("URL", URL).Debug("set server URL")
 
 	client.Run()
 
-	suite.wg.Wait()
+	wg.Wait()
 
 	srv.Close()
 }
