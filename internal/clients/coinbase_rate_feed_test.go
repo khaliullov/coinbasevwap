@@ -157,17 +157,23 @@ func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 		}
 		log.WithField("messsage", string(p)).Debug("Helloer: read")
 		if bytes.Contains(p, []byte(`"type":"subscribe"`)) {
+			if m.subscribeDelay > 0 {
+				<-time.After(m.subscribeDelay)
+			}
 			if m.disconnectOnMessageType == "subscribe" {
 				m.callbackCh <- true
-			} else {
+			} else if m.sendSubscribeResponse {
 				r := `{"type":"subscriptions","channels":[{"name":"matches","product_ids":["BTC-USD","ETH-USD","ETH-BTC"]}]}`
 				m.buffer = append([]string{r + "\n"}, m.buffer...)
 			}
 		}
 		if bytes.Contains(p, []byte(`"type":"unsubscribe"`)) {
+			if m.unsubscribeDelay > 0 {
+				<-time.After(m.unsubscribeDelay)
+			}
 			if m.disconnectOnMessageType == "unsubscribe" {
 				m.callbackCh <- true
-			} else {
+			} else if m.sendUnsubscribeResponse {
 				m.buffer = append([]string{`{"type":"subscriptions","channels":[]}` + "\n"}, m.buffer...)
 			}
 		}
@@ -229,6 +235,8 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 	srv := httptest.NewServer(NewHelloer(WithMessage(testMessage)))
 	defer srv.Close()
 
+	<-time.After(500 * time.Millisecond) // wait to server start
+
 	URL := httpToWs(srv.URL)
 	config := suite.getConfig(URL)
 	client, err := NewCoinbaseRateFeed(suite.wg, config)
@@ -285,6 +293,8 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Error() {
 		srv := httptest.NewServer(NewHelloer(WithMessage(test.message)))
 		defer srv.Close()
 
+		<-time.After(500 * time.Millisecond) // wait to server start
+
 		URL := httpToWs(srv.URL)
 		config := suite.getConfig(URL)
 		client, err := NewCoinbaseRateFeed(suite.wg, config)
@@ -309,6 +319,8 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_EchoFeed() {
 	srv := httptest.NewServer(NewEchoer())
 	defer srv.Close()
 
+	<-time.After(500 * time.Millisecond) // wait to server start
+
 	URL := httpToWs(srv.URL)
 	config := suite.getConfig(URL)
 	client, err := NewCoinbaseRateFeed(suite.wg, config)
@@ -322,11 +334,56 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_EchoFeed() {
 	srv.Close()
 }
 
-func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ResponseTimeoutError() {
-	for _, messageType := range []string{"subscribe", "unsubscribe"} {
-		helloer := NewHelloer(WithDisconnectOnMessageType(messageType))
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ServerErrors() {
+	tests := []struct {
+		Name          string
+		ExpectedError string
+		Opt           HelloerOption
+		WithCallback  bool
+	}{
+		{
+			Name:          "Test failing subscription",
+			ExpectedError: "Failed to change subscription",
+			Opt:           WithDisconnectOnMessageType("subscribe"),
+			WithCallback:  true,
+		},
+		{
+			Name:          "Test failing unsubscription",
+			ExpectedError: "Failed to change subscription",
+			Opt:           WithDisconnectOnMessageType("unsubscribe"),
+			WithCallback:  true,
+		},
+		{
+			Name:          "Test failing subscribe response timeout",
+			ExpectedError: "Failed to change subscription",
+			Opt:           WithSubscribeDelay(CommandTimeout + 100*time.Millisecond),
+			WithCallback:  false,
+		},
+		{
+			Name:          "Test failing unsubscribe response timeout",
+			ExpectedError: "Failed to change subscription",
+			Opt:           WithUnsubscribeDelay(CommandTimeout + 100*time.Millisecond),
+			WithCallback:  false,
+		},
+		{
+			Name:          "Test failing sending subscribe response",
+			ExpectedError: "Failed to change subscription",
+			Opt:           WithDoNotSendSubscribeResponse(),
+			WithCallback:  false,
+		},
+		{
+			Name:          "Test failing sending unsubscribe response",
+			ExpectedError: "Failed to change subscription",
+			Opt:           WithDoNotSendUnsubscribeResponse(),
+			WithCallback:  false,
+		},
+	}
+	for _, test := range tests {
+		helloer := NewHelloer(test.Opt)
 		srv := httptest.NewServer(helloer)
 		defer srv.Close()
+
+		<-time.After(500 * time.Millisecond) // wait to server start
 
 		URL := httpToWs(srv.URL)
 		config := suite.getConfig(URL)
@@ -339,18 +396,20 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ResponseTimeoutError()
 
 		client.Run()
 
-		for {
-			if <-helloer.callbackCh {
-				srv.Listener.Close()
-				srv.Close()
-				break
+		if test.WithCallback {
+			for {
+				if <-helloer.callbackCh {
+					srv.Listener.Close()
+					srv.Close()
+					break
+				}
 			}
 		}
 
 		suite.wg.Wait()
 
 		assert.True(suite.T(), len(hook.Entries) > 0)
-		assert.EqualValues(suite.T(), "Failed to change subscription", hook.Entries[0].Message)
+		assert.EqualValues(suite.T(), test.ExpectedError, hook.Entries[0].Message)
 
 		srv.Close()
 	}
