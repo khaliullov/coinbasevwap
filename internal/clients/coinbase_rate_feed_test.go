@@ -54,36 +54,6 @@ func (suite *CoinbaseRateFeedSuite) getLogger(testName string) *log.Logger {
 	return logger
 }
 
-func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorError() {
-	logger := suite.getLogger("Test_CoinbaseRateFeed_ConstructorError")
-	wg := new(sync.WaitGroup)
-	_, err := NewCoinbaseRateFeed(logger, wg, &entity.Config{})
-	assert.Error(suite.T(), err)
-	assert.ErrorIs(suite.T(), err, ErrBadConfiguration)
-}
-
-func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorOk() {
-	logger := suite.getLogger("Test_CoinbaseRateFeed_ConstructorOk")
-	wg := new(sync.WaitGroup)
-	_, err := NewCoinbaseRateFeed(logger, wg, suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL))
-	assert.NoError(suite.T(), err)
-}
-
-func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_RegisterConsumerOk() {
-	logger := suite.getLogger("Test_CoinbaseRateFeed_RegisterConsumerOk")
-	wg := new(sync.WaitGroup)
-	consumer := new(mockConsumers.Consumer)
-	client := &coinbaseRateFeed{
-		wg:          wg,
-		wsm:         NewWebSocket(logger, DefaultCoinbaseRateFeedWebsocketURL, http.Header{}),
-		config:      suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL),
-		state:       WS_CONNECTING,
-		subscribers: make([]consumers.Consumer, 0),
-	}
-	client.RegisterMatchConsumer(consumer)
-	assert.Len(suite.T(), client.subscribers, 1)
-}
-
 type Helloer struct {
 	buffer                  []string
 	subscribeDelay          time.Duration
@@ -263,49 +233,6 @@ func (m *Hook) ErrorOccurred() bool {
 	return m.errorOccurred
 }
 
-func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
-	logger := suite.getLogger("Test_CoinbaseRateFeed_Ok")
-	testMessage := `{
-		"type": "match",
- 		"trade_id": 260823760,
-		"maker_order_id": "2458f516-42e1-4f3d-950d-556a77fa7699",
-		"taker_order_id": "6ecfedd9-d434-4096-b3ae-a4b2850bad10",
-		"side": "sell",
-		"size": "0.0234701",
-		"price": "41801.67",
-		"product_id": "BTC-USD",
-		"sequence": 32856489309,
-		"time":	"2022-01-07T19:54:43.295378Z"
-	}
-`
-	srv := httptest.NewServer(NewHelloer(logger, WithMessage(testMessage)))
-	defer srv.Close()
-
-	URL := httpToWs(srv.URL)
-	logger.WithField("URL", URL).Debug("set server URL")
-	config := suite.getConfig(URL)
-	wg := new(sync.WaitGroup)
-	client, err := NewCoinbaseRateFeed(logger, wg, config)
-	assert.NoError(suite.T(), err)
-	consumer := new(mockConsumers.Consumer)
-	consumer.On("Consume", mock.Anything).Return(func(msg interface{}) error {
-		message, _ := msg.(*entity.Match)
-		assert.EqualValues(suite.T(), "0.0234701", message.Size)
-		assert.EqualValues(suite.T(), "41801.67", message.Price)
-
-		client.Stop()
-
-		return consumers.ErrBadMatchMessage
-	})
-	client.RegisterMatchConsumer(consumer)
-
-	client.Run()
-
-	wg.Wait()
-
-	srv.Close()
-}
-
 func (suite *CoinbaseRateFeedSuite) runServerTest(logger *log.Logger, expectedError string, withCallback bool,
 	opts ...HelloerOption) {
 	helloer := NewHelloer(logger, opts...)
@@ -353,6 +280,79 @@ func (suite *CoinbaseRateFeedSuite) runServerTest(logger *log.Logger, expectedEr
 	wg.Wait()
 
 	assert.True(suite.T(), hook.ErrorOccurred(), expectedError)
+
+	srv.Close()
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorError() {
+	logger := suite.getLogger("Test_CoinbaseRateFeed_ConstructorError")
+	wg := new(sync.WaitGroup)
+	_, err := NewCoinbaseRateFeed(logger, wg, &entity.Config{})
+	assert.Error(suite.T(), err)
+	assert.ErrorIs(suite.T(), err, ErrBadConfiguration)
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorOk() {
+	logger := suite.getLogger("Test_CoinbaseRateFeed_ConstructorOk")
+	wg := new(sync.WaitGroup)
+	_, err := NewCoinbaseRateFeed(logger, wg, suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL))
+	assert.NoError(suite.T(), err)
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_RegisterConsumerOk() {
+	logger := suite.getLogger("Test_CoinbaseRateFeed_RegisterConsumerOk")
+	wg := new(sync.WaitGroup)
+	consumer := new(mockConsumers.Consumer)
+	client := &coinbaseRateFeed{
+		wg:          wg,
+		wsm:         NewWebSocket(logger, DefaultCoinbaseRateFeedWebsocketURL, http.Header{}),
+		config:      suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL),
+		state:       WS_CONNECTING,
+		subscribers: make([]consumers.Consumer, 0),
+	}
+	client.RegisterMatchConsumer(consumer)
+	assert.Len(suite.T(), client.subscribers, 1)
+}
+
+func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
+	logger := suite.getLogger("Test_CoinbaseRateFeed_Ok")
+	testMessage := `{
+		"type": "match",
+ 		"trade_id": 260823760,
+		"maker_order_id": "2458f516-42e1-4f3d-950d-556a77fa7699",
+		"taker_order_id": "6ecfedd9-d434-4096-b3ae-a4b2850bad10",
+		"side": "sell",
+		"size": "0.0234701",
+		"price": "41801.67",
+		"product_id": "BTC-USD",
+		"sequence": 32856489309,
+		"time":	"2022-01-07T19:54:43.295378Z"
+	}
+`
+	srv := httptest.NewServer(NewHelloer(logger, WithMessage(testMessage)))
+	defer srv.Close()
+
+	URL := httpToWs(srv.URL)
+	logger.WithField("URL", URL).Debug("set server URL")
+	config := suite.getConfig(URL)
+	wg := new(sync.WaitGroup)
+	client, err := NewCoinbaseRateFeed(logger, wg, config)
+	assert.NoError(suite.T(), err)
+	consumer := new(mockConsumers.Consumer)
+	consumer.On("Consume", mock.Anything).Return(func(msg interface{}) error {
+		message, _ := msg.(*entity.Match)
+		assert.EqualValues(suite.T(), "0.0234701", message.Size)
+		assert.EqualValues(suite.T(), "41801.67", message.Price)
+
+		client.Stop()
+
+		return consumers.ErrBadMatchMessage
+	})
+	client.RegisterMatchConsumer(consumer)
+
+	client.Run()
+
+	wg.Wait()
 
 	srv.Close()
 }

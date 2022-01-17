@@ -163,6 +163,7 @@ func (m *coinbaseRateFeed) processStatus(command chan<- WSCommand, output chan<-
 		return status.Error
 	}
 	m.state = status.State
+	m.logger.WithField("status", m.state).Debug("changed status")
 	if !m.isStopped() {
 		if status.State == WS_CONNECTED {
 			m.useTextProtocol(command)
@@ -258,7 +259,7 @@ func (m *coinbaseRateFeed) Run() {
 				}
 				_ = m.processStatus(command, output, st)
 			case msg, ok := <-input:
-				if ok && !m.isStopped() {
+				if ok {
 					_ = m.processMessage(command, msg) // ignore protocol errors
 				}
 			}
@@ -268,9 +269,5 @@ func (m *coinbaseRateFeed) Run() {
 
 // Stop - stop websocket connection
 func (m *coinbaseRateFeed) Stop() {
-	if !m.isStopped() {
-		m.unsubscribe(m.wsm.Output())
-	} else {
-		m.logger.Debug("already stopped")
-	}
+	m.unsubscribe(m.wsm.Output())
 }

@@ -256,16 +256,21 @@ func (m *WSMachine) write(conn *websocket.Conn, msgType int) {
 		select {
 		case msg, ok := <-m.outCh:
 			if ok {
-				m.ioEventCh <- true
 				if err := conn.SetWriteDeadline(time.Now().Add(3 * time.Second)); err != nil {
+					m.logger.WithFields(log.Fields{
+						"msg": string(msg),
+					}).Error("set write deadline")
 					m.wErrorCh <- err
 					return
 				}
 				if err := conn.WriteMessage(msgType, msg); err != nil {
-					m.logger.WithField("msg", string(msg)).Debug("writing message")
+					m.logger.WithFields(log.Fields{
+						"msg": string(msg),
+					}).Error("writing message")
 					m.wErrorCh <- err
 					return
 				}
+				m.ioEventCh <- true
 				_ = conn.SetWriteDeadline(time.Time{}) // reset write deadline
 			} else {
 				m.logger.Error("write error: outCh closed")
@@ -301,7 +306,7 @@ func (m *WSMachine) cleanup() {
 	// close local output channels
 	close(m.conCancelCh) // this makes connect    to exit
 	close(m.wControlCh)  // this makes write      to exit
-	close(m.ioEventCh)   // this makes keepAlive to exit
+	close(m.ioEventCh)   // this makes keepAlive  to exit
 
 	// drain inpCh channels
 	<-time.After(50 * time.Millisecond) // small pause to let things react
