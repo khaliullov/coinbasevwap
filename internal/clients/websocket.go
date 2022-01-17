@@ -34,6 +34,7 @@ type (
 		wControlCh  chan WSCommand
 		ioEventCh   chan bool
 		wg          sync.WaitGroup
+		logger      *log.Logger
 	}
 	// WSStatus – status structure
 	WSStatus struct {
@@ -104,7 +105,7 @@ func (c WSCommand) String() string {
 }
 
 // NewWebSocket – constructor of WebSocket state machine
-func NewWebSocket(url string, headers http.Header) *WSMachine {
+func NewWebSocket(logger *log.Logger, url string, headers http.Header) *WSMachine {
 	res := &WSMachine{
 		url:         url,
 		headers:     headers,
@@ -119,6 +120,7 @@ func NewWebSocket(url string, headers http.Header) *WSMachine {
 		wControlCh:  make(chan WSCommand, 1),
 		ioEventCh:   make(chan bool, 2),
 		wg:          sync.WaitGroup{},
+		logger:      logger,
 	}
 
 	return res
@@ -156,9 +158,12 @@ func (m *WSMachine) Command() chan<- WSCommand {
 
 func (m *WSMachine) connect() {
 	m.wg.Add(1)
-	defer m.wg.Done()
+	defer func() {
+		m.logger.Debug("connect stopped")
+		m.wg.Done()
+	}()
 
-	log.Debug("connect has started")
+	m.logger.Debug("connect has started")
 
 	for {
 		m.stsCh <- WSStatus{State: WS_CONNECTING}
@@ -170,14 +175,14 @@ func (m *WSMachine) connect() {
 			m.stsCh <- WSStatus{State: WS_CONNECTED}
 			return
 		}
-		log.WithField("error", err).Error("connect error")
+		m.logger.WithField("error", err).Error("connect error")
 		m.stsCh <- WSStatus{WS_DISCONNECTED, err}
 
 		m.stsCh <- WSStatus{State: WS_WAITING}
 		select {
 		case <-time.After(34 * time.Second):
 		case <-m.conCancelCh:
-			m.stsCh <- WSStatus{WS_DISCONNECTED, ErrWSCanceled} // TODO error
+			m.stsCh <- WSStatus{WS_DISCONNECTED, ErrWSCanceled}
 			return
 		}
 	}
@@ -185,9 +190,12 @@ func (m *WSMachine) connect() {
 
 func (m *WSMachine) keepAlive() {
 	m.wg.Add(1)
-	defer m.wg.Done()
+	defer func() {
+		m.logger.Debug("keepAlive stopped")
+		m.wg.Done()
+	}()
 
-	log.Debug("keepAlive has started")
+	m.logger.Debug("keepAlive has started")
 
 	dur := 34 * time.Second
 	timer := time.NewTimer(dur)
@@ -215,17 +223,20 @@ func (m *WSMachine) keepAlive() {
 
 func (m *WSMachine) read(conn *websocket.Conn) {
 	m.wg.Add(1)
-	defer m.wg.Done()
+	defer func() {
+		m.logger.Debug("read stopped")
+		m.wg.Done()
+	}()
 
-	log.Debug("read has started")
+	m.logger.Debug("read has started")
 
 	for {
 		if _, msg, err := conn.ReadMessage(); err == nil {
-			log.WithField("msg", string(msg)).Debug("received message")
+			m.logger.WithField("msg", string(msg)).Debug("received message")
 			m.ioEventCh <- true
 			m.inpCh <- msg
 		} else {
-			log.WithField("error", err).Error("read error")
+			m.logger.WithField("error", err).Error("read error")
 			m.rErrorCh <- err
 			break
 		}
@@ -234,9 +245,12 @@ func (m *WSMachine) read(conn *websocket.Conn) {
 
 func (m *WSMachine) write(conn *websocket.Conn, msgType int) {
 	m.wg.Add(1)
-	defer m.wg.Done()
+	defer func() {
+		m.logger.Debug("write stopped")
+		m.wg.Done()
+	}()
 
-	log.Debug("write has started")
+	m.logger.Debug("write has started")
 
 	for {
 		select {
@@ -248,12 +262,13 @@ func (m *WSMachine) write(conn *websocket.Conn, msgType int) {
 					return
 				}
 				if err := conn.WriteMessage(msgType, msg); err != nil {
+					m.logger.WithField("msg", string(msg)).Debug("writing message")
 					m.wErrorCh <- err
 					return
 				}
 				_ = conn.SetWriteDeadline(time.Time{}) // reset write deadline
 			} else {
-				log.Error("write error: outCh closed")
+				m.logger.Error("write error: outCh closed")
 				m.wErrorCh <- ErrWSOutputChannelClosed
 				return
 			}
@@ -264,12 +279,12 @@ func (m *WSMachine) write(conn *websocket.Conn, msgType int) {
 			}
 			switch cmd {
 			case WS_QUIT:
-				log.Debug("write received WS_QUIT command")
+				m.logger.Debug("write received WS_QUIT command")
 				m.wErrorCh <- ErrWSCanceled
 				return
 			case WS_PING:
 				if err := conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(3*time.Second)); err != nil {
-					log.WithField("error", err).Error("ping error")
+					m.logger.WithField("error", err).Error("ping error")
 					m.wErrorCh <- ErrWSCanceled
 					return
 				}
@@ -338,7 +353,7 @@ func (m *WSMachine) MainLoop() {
 	msgType := websocket.BinaryMessage // use Binary messages by default
 
 	defer func() {
-		log.Debug("cleanup has started")
+		m.logger.Debug("cleanup has started")
 		if conn != nil {
 			conn.Close()
 		} // this also makes reader to exit
@@ -346,7 +361,7 @@ func (m *WSMachine) MainLoop() {
 		m.cleanup()
 	}()
 
-	log.Debug("main loop has started")
+	m.logger.Debug("main loop has started")
 
 	go m.connect()
 	go m.keepAlive()
@@ -357,7 +372,7 @@ func (m *WSMachine) MainLoop() {
 			if conn == nil {
 				return
 			}
-			log.WithFields(log.Fields{
+			m.logger.WithFields(log.Fields{
 				"local":  conn.LocalAddr(),
 				"remote": conn.RemoteAddr(),
 			}).Info("connected")
@@ -366,17 +381,16 @@ func (m *WSMachine) MainLoop() {
 			writing = true
 			go m.read(conn)
 			go m.write(conn, msgType)
-
 		case err := <-m.rErrorCh:
 			reading = false
 			if writing {
 				// write goroutine is still active
-				log.Error("read error -> stopping write")
+				m.logger.Error("read error -> stopping write")
 				m.wControlCh <- WS_QUIT // ask write to exit
 				m.stsCh <- WSStatus{WS_DISCONNECTED, err}
 			} else {
 				// both read and write goroutines have exited
-				log.Error("read error -> starting connect()")
+				m.logger.Error("read error -> starting connect()")
 				if conn != nil {
 					conn.Close()
 					conn = nil
@@ -388,7 +402,7 @@ func (m *WSMachine) MainLoop() {
 			writing = false
 			if reading {
 				// read goroutine is still active
-				log.Error("write error -> stopping read")
+				m.logger.Error("write error -> stopping read")
 				if conn != nil {
 					conn.Close() // this also makes read to exit
 					conn = nil
@@ -396,12 +410,12 @@ func (m *WSMachine) MainLoop() {
 				m.stsCh <- WSStatus{WS_DISCONNECTED, err}
 			} else {
 				// both read and write goroutines have exited
-				log.Error("write error -> starting connect()")
+				m.logger.Error("write error -> starting connect()")
 				go m.connect()
 			}
 		case cmd, ok := <-m.cmdCh:
 			if ok {
-				log.WithField("cmd", cmd).Debug("received command")
+				m.logger.WithField("cmd", cmd).Debug("received command")
 			}
 			switch {
 			case !ok || cmd == WS_QUIT:

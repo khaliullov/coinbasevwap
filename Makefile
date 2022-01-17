@@ -29,7 +29,7 @@ lint:
 
 test:	## Run tests
 test:
-	go test -cover ./...
+	go test -timeout 30s -cover ./...
 
 run:	## Start app
 run:

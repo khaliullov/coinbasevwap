@@ -22,8 +22,6 @@ import (
 
 type CoinbaseRateFeedSuite struct {
 	suite.Suite
-	logBuffer bytes.Buffer
-	oldOutput io.Writer
 }
 
 func TestCoinbaseRateFeedSuite(t *testing.T) {
@@ -31,8 +29,9 @@ func TestCoinbaseRateFeedSuite(t *testing.T) {
 }
 
 func (suite *CoinbaseRateFeedSuite) SetupTest() {
-	suite.oldOutput = log.StandardLogger().Out
-	log.SetOutput(&suite.logBuffer)
+}
+
+func (suite *CoinbaseRateFeedSuite) TearDownTest() {
 }
 
 func (suite *CoinbaseRateFeedSuite) getConfig(url string) *entity.Config {
@@ -44,29 +43,39 @@ func (suite *CoinbaseRateFeedSuite) getConfig(url string) *entity.Config {
 	}
 }
 
-func (suite *CoinbaseRateFeedSuite) TearDownTest() {
-	log.SetOutput(suite.oldOutput)
+func (suite *CoinbaseRateFeedSuite) getLogger(testName string) *log.Logger {
+	logger := log.New()
+	logger.SetLevel(log.DebugLevel)
+	logger.SetFormatter(&log.TextFormatter{
+		DisableColors:   true,
+		FullTimestamp:   true,
+		TimestampFormat: testName + " " + time.RFC3339,
+	})
+	return logger
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorError() {
+	logger := suite.getLogger("Test_CoinbaseRateFeed_ConstructorError")
 	wg := new(sync.WaitGroup)
-	_, err := NewCoinbaseRateFeed(wg, &entity.Config{})
+	_, err := NewCoinbaseRateFeed(logger, wg, &entity.Config{})
 	assert.Error(suite.T(), err)
 	assert.ErrorIs(suite.T(), err, ErrBadConfiguration)
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_ConstructorOk() {
+	logger := suite.getLogger("Test_CoinbaseRateFeed_ConstructorOk")
 	wg := new(sync.WaitGroup)
-	_, err := NewCoinbaseRateFeed(wg, suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL))
+	_, err := NewCoinbaseRateFeed(logger, wg, suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL))
 	assert.NoError(suite.T(), err)
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_RegisterConsumerOk() {
+	logger := suite.getLogger("Test_CoinbaseRateFeed_RegisterConsumerOk")
 	wg := new(sync.WaitGroup)
 	consumer := new(mockConsumers.Consumer)
 	client := &coinbaseRateFeed{
 		wg:          wg,
-		wsm:         NewWebSocket(DefaultCoinbaseRateFeedWebsocketURL, http.Header{}),
+		wsm:         NewWebSocket(logger, DefaultCoinbaseRateFeedWebsocketURL, http.Header{}),
 		config:      suite.getConfig(DefaultCoinbaseRateFeedWebsocketURL),
 		state:       WS_CONNECTING,
 		subscribers: make([]consumers.Consumer, 0),
@@ -81,8 +90,10 @@ type Helloer struct {
 	unsubscribeDelay        time.Duration
 	sendSubscribeResponse   bool
 	sendUnsubscribeResponse bool
+	disconnectClient        bool
 	disconnectOnMessageType string
-	callbackCh              chan bool
+	callbackCh              chan string
+	mu                      sync.RWMutex
 }
 
 type HelloerOption func(m *Helloer)
@@ -90,6 +101,12 @@ type HelloerOption func(m *Helloer)
 func WithSubscribeDelay(duration time.Duration) HelloerOption {
 	return func(m *Helloer) {
 		m.subscribeDelay = duration
+	}
+}
+
+func WithStopClientAfterConnect() HelloerOption {
+	return func(m *Helloer) {
+		m.disconnectClient = true
 	}
 }
 
@@ -131,7 +148,8 @@ func NewHelloer(opts ...HelloerOption) *Helloer {
 		sendSubscribeResponse:   true,
 		sendUnsubscribeResponse: true,
 		disconnectOnMessageType: "",
-		callbackCh:              make(chan bool, 2),
+		disconnectClient:        false,
+		callbackCh:              make(chan string, 2),
 	}
 
 	for _, opt := range opts {
@@ -161,23 +179,31 @@ func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 			if m.subscribeDelay > 0 {
 				<-time.After(m.subscribeDelay)
 			}
+			m.callbackCh <- "subscribe"
 			if m.disconnectOnMessageType == "subscribe" {
-				m.callbackCh <- true
+				return
 			} else if m.sendSubscribeResponse {
 				r := `{"type":"subscriptions","channels":[{"name":"matches","product_ids":["BTC-USD","ETH-USD","ETH-BTC"]}]}`
+				m.mu.Lock()
 				m.buffer = append([]string{r + "\n"}, m.buffer...)
+				m.mu.Unlock()
 			}
 		}
 		if bytes.Contains(p, []byte(`"type":"unsubscribe"`)) {
 			if m.unsubscribeDelay > 0 {
 				<-time.After(m.unsubscribeDelay)
 			}
+			m.callbackCh <- "unsubscribe"
 			if m.disconnectOnMessageType == "unsubscribe" {
-				m.callbackCh <- true
+				return
 			} else if m.sendUnsubscribeResponse {
+				m.mu.Lock()
 				m.buffer = append([]string{`{"type":"subscriptions","channels":[]}` + "\n"}, m.buffer...)
+				m.mu.Unlock()
 			}
 		}
+		m.mu.Lock()
+		defer m.mu.Unlock()
 		for len(m.buffer) > 0 {
 			var msg string
 			msg, m.buffer = m.buffer[0], m.buffer[1:]
@@ -190,20 +216,36 @@ func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func (m *Helloer) ShouldStopClient() bool {
+	return m.disconnectClient
+}
+
+func (m *Helloer) WhenShouldStopServer() string {
+	return m.disconnectOnMessageType
+}
+
 type Hook struct {
-	Entries []log.Entry
-	mu      sync.RWMutex
-	client  CoinbaseRateFeedInterface
+	mu            sync.RWMutex
+	LastError     string
+	client        CoinbaseRateFeedInterface
+	expectedError string
+	errorOccurred bool
+	logger        *log.Logger
 }
 
 func (m *Hook) Fire(e *log.Entry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	if m.client != nil {
 		m.client.Stop()
 		m.client = nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.Entries = append(m.Entries, *e)
+
+	if e.Message == m.expectedError {
+		m.errorOccurred = true
+	}
+
 	return nil
 }
 
@@ -213,13 +255,14 @@ func (m *Hook) Levels() []log.Level {
 	}
 }
 
-func (m *Hook) Reset() {
+func (m *Hook) ErrorOccurred() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.Entries = make([]log.Entry, 0)
+	return m.errorOccurred
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
+	logger := suite.getLogger("Test_CoinbaseRateFeed_Ok")
 	testMessage := `{
 		"type": "match",
  		"trade_id": 260823760,
@@ -236,14 +279,12 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 	srv := httptest.NewServer(NewHelloer(WithMessage(testMessage)))
 	defer srv.Close()
 
-	<-time.After(500 * time.Millisecond) // wait to server start
-
 	URL := httpToWs(srv.URL)
+	logger.WithField("URL", URL).Debug("set server URL")
 	config := suite.getConfig(URL)
 	wg := new(sync.WaitGroup)
-	client, err := NewCoinbaseRateFeed(wg, config)
+	client, err := NewCoinbaseRateFeed(logger, wg, config)
 	assert.NoError(suite.T(), err)
-	log.WithField("URL", URL).Debug("set server URL")
 	consumer := new(mockConsumers.Consumer)
 	consumer.On("Consume", mock.Anything).Return(func(msg interface{}) error {
 		message, _ := msg.(*entity.Match)
@@ -263,30 +304,43 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 	srv.Close()
 }
 
-func (suite *CoinbaseRateFeedSuite) runServerTest(expectedError string, withCallback bool, opts ...HelloerOption) {
+func (suite *CoinbaseRateFeedSuite) runServerTest(logger *log.Logger, expectedError string, withCallback bool,
+	opts ...HelloerOption) {
 	helloer := NewHelloer(opts...)
 	srv := httptest.NewServer(helloer)
 	defer srv.Close()
 
-	<-time.After(500 * time.Millisecond) // wait to server start
-
 	URL := httpToWs(srv.URL)
+	logger.WithField("URL", URL).Debug("set server URL")
 	config := suite.getConfig(URL)
-	hook := new(Hook)
-	log.AddHook(hook)
 	wg := new(sync.WaitGroup)
-	client, err := NewCoinbaseRateFeed(wg, config)
+	client, err := NewCoinbaseRateFeed(logger, wg, config)
 	assert.NoError(suite.T(), err)
+	hook := &Hook{
+		expectedError: expectedError,
+		errorOccurred: false,
+		logger:        logger,
+	}
 	hook.client = client
-	log.WithField("URL", URL).Debug("set server URL")
+	logger.AddHook(hook)
 
 	client.Run()
 
 	if withCallback {
 		for {
-			if <-helloer.callbackCh {
+			messageType, ok := <-helloer.callbackCh
+			if !ok {
+				break
+			}
+
+			if helloer.WhenShouldStopServer() == messageType {
 				srv.Listener.Close()
 				srv.Close()
+				break
+			}
+
+			if messageType == "subscribe" && helloer.ShouldStopClient() {
+				client.Stop()
 				break
 			}
 		}
@@ -294,78 +348,88 @@ func (suite *CoinbaseRateFeedSuite) runServerTest(expectedError string, withCall
 
 	wg.Wait()
 
-	assert.True(suite.T(), len(hook.Entries) > 0)
-	assert.EqualValues(suite.T(), expectedError, hook.Entries[0].Message)
+	assert.True(suite.T(), hook.ErrorOccurred(), expectedError)
 
 	srv.Close()
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_BadMessage() {
-	suite.runServerTest("Failed to parse message JSON", false, WithMessage("Test\n"))
+	logger := suite.getLogger("Test_CoinbaseRateFeed_BadMessage")
+	suite.runServerTest(logger, "Failed to parse message JSON", false,
+		WithMessage("Test\n"))
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_BadJSONMessage() {
-	suite.runServerTest("Skipping message with unknown type", false,
+	logger := suite.getLogger("Test_CoinbaseRateFeed_BadJSONMessage")
+	suite.runServerTest(logger, "Skipping message with unknown type", false,
 		WithMessage("{\"success\": true}\n"))
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_BadTypeMessage() {
-	suite.runServerTest("Failed to get type", false,
+	logger := suite.getLogger("Test_CoinbaseRateFeed_BadTypeMessage")
+	suite.runServerTest(logger, "Failed to get type", false,
 		WithMessage("{\"type\": true}"))
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_UnknownTypeMessage() {
-	suite.runServerTest("Skipping message with unknown type", false,
+	logger := suite.getLogger("Test_CoinbaseRateFeed_UnknownTypeMessage")
+	suite.runServerTest(logger, "Skipping message with unknown type", false,
 		WithMessage("{\"type\": \"test\"}"))
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_IncorrectMessage() {
-	suite.runServerTest("Unable to unmarshal message to appropriate structure", false,
+	logger := suite.getLogger("Test_CoinbaseRateFeed_IncorrectMessage")
+	suite.runServerTest(logger, "Unable to unmarshal message to appropriate structure", false,
 		WithMessage("{\"type\": \"match\", \"size\": 0.01}"))
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_DisconnectOnSubscribe() {
-	suite.runServerTest("Failed to change subscription", true,
+	logger := suite.getLogger("Test_CoinbaseRateFeed_DisconnectOnSubscribe")
+	suite.runServerTest(logger, "Failed to change subscription", true,
 		WithDisconnectOnMessageType("subscribe"))
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_DisconnectOnUnsubscribe() {
-	suite.runServerTest("Failed to change subscription", true,
-		WithDisconnectOnMessageType("unsubscribe"))
+	logger := suite.getLogger("Test_CoinbaseRateFeed_DisconnectOnUnsubscribe")
+	suite.runServerTest(logger, "Failed to change subscription", true,
+		WithStopClientAfterConnect(), WithDisconnectOnMessageType("unsubscribe"))
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_DelayedSubscribeResponse() {
-	suite.runServerTest("Failed to change subscription", false,
+	logger := suite.getLogger("Test_CoinbaseRateFeed_DelayedSubscribeResponse")
+	suite.runServerTest(logger, "Failed to change subscription", false,
 		WithSubscribeDelay(CommandTimeout+100*time.Millisecond))
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_DelayedUnsubscribeResponse() {
-	suite.runServerTest("Failed to change subscription", false,
-		WithUnsubscribeDelay(CommandTimeout+100*time.Millisecond))
+	logger := suite.getLogger("Test_CoinbaseRateFeed_DelayedUnsubscribeResponse")
+	suite.runServerTest(logger, "Failed to change subscription", true,
+		WithStopClientAfterConnect(), WithUnsubscribeDelay(CommandTimeout+100*time.Millisecond))
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_NoSubscribeResponse() {
-	suite.runServerTest("Failed to change subscription", false,
+	logger := suite.getLogger("Test_CoinbaseRateFeed_NoSubscribeResponse")
+	suite.runServerTest(logger, "Failed to change subscription", false,
 		WithDoNotSendSubscribeResponse())
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_NoUnsubscribeResponse() {
-	suite.runServerTest("Failed to change subscription", false,
-		WithDoNotSendUnsubscribeResponse())
+	logger := suite.getLogger("Test_CoinbaseRateFeed_NoUnsubscribeResponse")
+	suite.runServerTest(logger, "Failed to change subscription", true,
+		WithStopClientAfterConnect(), WithDoNotSendUnsubscribeResponse())
 }
 
 func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_EchoFeed() {
+	logger := suite.getLogger("Test_CoinbaseRateFeed_EchoFeed")
 	srv := httptest.NewServer(NewEchoer())
 	defer srv.Close()
 
-	<-time.After(500 * time.Millisecond) // wait to server start
-
 	URL := httpToWs(srv.URL)
+	logger.WithField("URL", URL).Debug("set server URL")
 	config := suite.getConfig(URL)
 	wg := new(sync.WaitGroup)
-	client, err := NewCoinbaseRateFeed(wg, config)
+	client, err := NewCoinbaseRateFeed(logger, wg, config)
 	assert.NoError(suite.T(), err)
-	log.WithField("URL", URL).Debug("set server URL")
 
 	client.Run()
 

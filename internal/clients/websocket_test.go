@@ -17,8 +17,7 @@ import (
 
 type WebSocketSuite struct {
 	suite.Suite
-	logBuffer bytes.Buffer
-	oldOutput io.Writer
+	logger *log.Logger
 }
 
 type Echoer struct {
@@ -65,16 +64,14 @@ func TestWebSocketSuite(t *testing.T) {
 }
 
 func (suite *WebSocketSuite) SetupTest() {
-	suite.oldOutput = log.StandardLogger().Out
-	log.SetOutput(&suite.logBuffer)
+	suite.logger = log.New()
 }
 
 func (suite *WebSocketSuite) TearDownTest() {
-	log.SetOutput(suite.oldOutput)
 }
 
 func (suite *WebSocketSuite) wrongState(expected, state WSState, err error) {
-	log.WithFields(log.Fields{
+	suite.logger.WithFields(log.Fields{
 		"expectedState": expected,
 		"state":         state,
 		"error":         err,
@@ -83,7 +80,7 @@ func (suite *WebSocketSuite) wrongState(expected, state WSState, err error) {
 
 func (suite *WebSocketSuite) TestBadURL() {
 	url := "ws://websocket.bad.url/"
-	ws := NewWebSocket(url, http.Header{})
+	ws := NewWebSocket(suite.logger, url, http.Header{})
 	assert.Equal(suite.T(), url, ws.URL())
 	assert.Equal(suite.T(), http.Header{}, ws.Headers())
 
@@ -120,9 +117,9 @@ func (suite *WebSocketSuite) TestConnect() {
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	log.WithField("URL", URL).Debug("set server URL")
+	suite.logger.WithField("URL", URL).Debug("set server URL")
 
-	ws := NewWebSocket(URL, http.Header{})
+	ws := NewWebSocket(suite.logger, URL, http.Header{})
 
 	ws.wg.Add(1)
 
@@ -156,9 +153,9 @@ func (suite *WebSocketSuite) TestReconnect() {
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	log.WithField("URL", URL).Debug("set server URL")
+	suite.logger.WithField("URL", URL).Debug("set server URL")
 
-	ws := NewWebSocket(URL, http.Header{})
+	ws := NewWebSocket(suite.logger, URL, http.Header{})
 
 	ws.wg.Add(1)
 
@@ -186,7 +183,7 @@ func (suite *WebSocketSuite) TestReconnect() {
 				suite.wrongState(state, st.State, st.Error)
 			}
 		case <-time.After(200 * time.Millisecond):
-			log.WithField("expectedState", state).Error("WSChan has not changed state in time, expected")
+			suite.logger.WithField("expectedState", state).Error("WSChan has not changed state in time, expected")
 		}
 	}
 
@@ -200,9 +197,9 @@ func (suite *WebSocketSuite) TestServerDisappear() {
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	log.WithField("URL", URL).Debug("set server URL")
+	suite.logger.WithField("URL", URL).Debug("set server URL")
 
-	ws := NewWebSocket(URL, http.Header{})
+	ws := NewWebSocket(suite.logger, URL, http.Header{})
 
 	ws.wg.Add(1)
 
@@ -232,7 +229,7 @@ func (suite *WebSocketSuite) TestServerDisappear() {
 				suite.wrongState(state, st.State, st.Error)
 			}
 		case <-time.After(200 * time.Millisecond):
-			log.WithField("expectedState", state).Error("WSChan has not changed state in time, expected")
+			suite.logger.WithField("expectedState", state).Error("WSChan has not changed state in time, expected")
 		}
 	}
 
@@ -246,9 +243,9 @@ func (suite *WebSocketSuite) TestEcho() {
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
-	log.WithField("URL", URL).Debug("set server URL")
+	suite.logger.WithField("URL", URL).Debug("set server URL")
 
-	ws := NewWebSocket(URL, http.Header{})
+	ws := NewWebSocket(suite.logger, URL, http.Header{})
 
 	ws.wg.Add(1)
 
@@ -274,15 +271,15 @@ func (suite *WebSocketSuite) TestEcho() {
 	select {
 	case msg, ok := <-inpCh:
 		if !ok {
-			log.Error("ws.Input unexpectedly closed")
+			suite.logger.Error("ws.Input unexpectedly closed")
 		} else if !bytes.Equal(msg, orig) {
-			log.WithFields(log.Fields{
+			suite.logger.WithFields(log.Fields{
 				"expectedMsg": string(orig),
 				"receivedMsg": string(msg),
 			}).Error("echo message mismatch")
 		}
 	case <-time.After(100 * time.Millisecond):
-		log.Error("Timeout when waiting for an echo message")
+		suite.logger.Error("Timeout when waiting for an echo message")
 	}
 
 	// cleanup

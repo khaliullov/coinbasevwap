@@ -24,13 +24,7 @@ const (
 	DefaultVolumeSize = 200
 )
 
-func init() {
-	log.SetOutput(os.Stderr)
-	log.Info("Coinbase rate VWAP.")
-	log.SetLevel(log.ErrorLevel)
-}
-
-func getConfig() *entity.Config {
+func getConfig(logger *log.Logger) *entity.Config {
 	help := flag.Bool("help", false, "Show help")
 	logLevel := flag.String("log-level", "error", "Logging level")
 	products := flag.String("products", DefaultProducts, "Products to subscribe to")
@@ -62,14 +56,19 @@ func getConfig() *entity.Config {
 }
 
 func main() {
-	cfg := getConfig()
+	logger := log.New()
+	logger.SetOutput(os.Stderr)
+	logger.Info("Coinbase rate VWAP.")
+	logger.SetLevel(log.ErrorLevel)
+
+	cfg := getConfig(logger)
 
 	wg := sync.WaitGroup{}
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 
-	client, err := clients.NewCoinbaseRateFeed(&wg, cfg)
+	client, err := clients.NewCoinbaseRateFeed(logger, &wg, cfg)
 	if err != nil {
 		log.Fatal(err)
 	}

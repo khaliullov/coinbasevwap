@@ -32,8 +32,6 @@ var (
 
 	// ErrBadConfiguration – wrong configuration of service
 	ErrBadConfiguration = errors.New("bad configuration")
-	// ErrDisconnected – disconnected from Coinbase rate feed WebSocket
-	ErrDisconnected = errors.New("disconnected")
 	// ErrBadJSON – could not parse JSON from Coinbase rate feed WebSocket
 	ErrBadJSON = errors.New("could not parse JSON")
 	// ErrFailedToDeserialize – failed to deserialize data from JSON to corresponding entity
@@ -56,24 +54,42 @@ type coinbaseRateFeed struct {
 	state        WSState
 	subscribers  []consumers.Consumer
 	cmdTimeoutCh chan bool
+	stopped      bool
+	logger       *log.Logger
+	mu           sync.RWMutex
 }
 
 // NewCoinbaseRateFeed – create WebSocket client for Coinbase rate feed
-func NewCoinbaseRateFeed(wg *sync.WaitGroup, config *entity.Config) (CoinbaseRateFeedInterface, error) {
+func NewCoinbaseRateFeed(logger *log.Logger, wg *sync.WaitGroup, config *entity.Config) (CoinbaseRateFeedInterface,
+	error) {
 	if config.URL == "" || len(config.Channels) == 0 || len(config.ProductIDs) == 0 {
 		return nil, ErrBadConfiguration
 	}
 
 	res := &coinbaseRateFeed{
 		wg:           wg,
-		wsm:          NewWebSocket(config.URL, http.Header{}),
+		wsm:          NewWebSocket(logger, config.URL, http.Header{}),
 		config:       config,
 		state:        WS_CONNECTING,
 		subscribers:  make([]consumers.Consumer, 0),
 		cmdTimeoutCh: make(chan bool, 2),
+		stopped:      false,
+		logger:       logger,
 	}
 
 	return res, nil
+}
+
+func (m *coinbaseRateFeed) stop() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stopped = true
+}
+
+func (m *coinbaseRateFeed) isStopped() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stopped
 }
 
 func (m *coinbaseRateFeed) RegisterMatchConsumer(consumer consumers.Consumer) {
@@ -81,7 +97,7 @@ func (m *coinbaseRateFeed) RegisterMatchConsumer(consumer consumers.Consumer) {
 }
 
 func (m *coinbaseRateFeed) publishMatchMessage(packet *entity.Match) {
-	log.WithFields(log.Fields{
+	m.logger.WithFields(log.Fields{
 		"type":   "Match",
 		"packet": packet,
 	}).Debug("Got Match packet")
@@ -89,7 +105,7 @@ func (m *coinbaseRateFeed) publishMatchMessage(packet *entity.Match) {
 	for _, subscriber := range m.subscribers {
 		err := subscriber.Consume(packet)
 		if err != nil {
-			log.WithFields(log.Fields{
+			m.logger.WithFields(log.Fields{
 				"packet": packet,
 				"error":  err,
 			}).Error("Match Consumer returned an error")
@@ -102,7 +118,7 @@ func (m *coinbaseRateFeed) useTextProtocol(command chan<- WSCommand) {
 }
 
 func (m *coinbaseRateFeed) subscriptionTimeout() {
-	log.Debug("subscriptionTimeout has started")
+	m.logger.Debug("subscriptionTimeout has started")
 
 	timer := time.NewTimer(CommandTimeout)
 
@@ -112,8 +128,9 @@ func (m *coinbaseRateFeed) subscriptionTimeout() {
 			timer.Stop()
 			return
 		case <-timer.C:
-			log.Error("Failed to change subscription")
+			m.logger.Error("Failed to change subscription")
 			cmdCh := m.wsm.Command()
+			m.stop()
 			cmdCh <- WS_QUIT
 			return
 		}
@@ -143,13 +160,11 @@ func (m *coinbaseRateFeed) processStatus(command chan<- WSCommand, output chan<-
 		return status.Error
 	}
 	m.state = status.State
-	switch status.State {
-	case WS_CONNECTED:
-		m.useTextProtocol(command)
-		m.subscribe(output)
-	case WS_DISCONNECTED:
-		m.wg.Done()
-		return ErrDisconnected
+	if !m.isStopped() {
+		if status.State == WS_CONNECTED {
+			m.useTextProtocol(command)
+			m.subscribe(output)
+		}
 	}
 	return nil
 }
@@ -158,7 +173,7 @@ func (m *coinbaseRateFeed) processMessage(command chan<- WSCommand, msg []byte) 
 	var payload map[string]interface{}
 	err := json.Unmarshal(msg, &payload)
 	if err != nil {
-		log.WithFields(log.Fields{
+		m.logger.WithFields(log.Fields{
 			"msg":   string(msg),
 			"error": err,
 		}).Error("Failed to parse message JSON")
@@ -169,7 +184,7 @@ func (m *coinbaseRateFeed) processMessage(command chan<- WSCommand, msg []byte) 
 	var packet interface{}
 	err = mapstructure.Decode(payload, basePacket)
 	if err != nil {
-		log.WithFields(log.Fields{
+		m.logger.WithFields(log.Fields{
 			"msg":   string(msg),
 			"error": err,
 		}).Error("Failed to get type")
@@ -182,7 +197,7 @@ func (m *coinbaseRateFeed) processMessage(command chan<- WSCommand, msg []byte) 
 	case "last_match", "match":
 		packet = new(entity.Match)
 	default:
-		log.WithFields(log.Fields{
+		m.logger.WithFields(log.Fields{
 			"msg":  string(msg),
 			"type": basePacket.Type,
 		}).Error("Skipping message with unknown type")
@@ -191,7 +206,7 @@ func (m *coinbaseRateFeed) processMessage(command chan<- WSCommand, msg []byte) 
 	}
 	err = mapstructure.Decode(payload, packet)
 	if err != nil {
-		log.WithFields(log.Fields{
+		m.logger.WithFields(log.Fields{
 			"msg":   string(msg),
 			"type":  basePacket.Type,
 			"error": err,
@@ -204,14 +219,14 @@ func (m *coinbaseRateFeed) processMessage(command chan<- WSCommand, msg []byte) 
 		m.publishMatchMessage(packet)
 	case *entity.Subscription:
 		m.cmdTimeoutCh <- true
-		log.WithFields(log.Fields{
+		m.logger.WithFields(log.Fields{
 			"type":   "Subscription",
 			"packet": packet,
 		}).Debug("Got Subscription packet")
 
 		if len(packet.Channels) == 0 {
-			log.Debug("Successfully unsubscribed. Disconnecting")
-
+			m.logger.Debug("Successfully unsubscribed. Disconnecting")
+			m.stop()
 			command <- WS_QUIT
 		}
 	}
@@ -233,12 +248,14 @@ func (m *coinbaseRateFeed) Run() {
 	status:
 		for {
 			select {
-			case st := <-status:
-				if m.processStatus(command, output, st) != nil {
+			case st, ok := <-status:
+				if !ok {
+					m.wg.Done()
 					break status
 				}
+				_ = m.processStatus(command, output, st)
 			case msg, ok := <-input:
-				if ok {
+				if ok && !m.isStopped() {
 					_ = m.processMessage(command, msg) // ignore protocol errors
 				}
 			}
