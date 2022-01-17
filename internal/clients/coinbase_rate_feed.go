@@ -268,5 +268,9 @@ func (m *coinbaseRateFeed) Run() {
 
 // Stop - stop websocket connection
 func (m *coinbaseRateFeed) Stop() {
-	m.unsubscribe(m.wsm.Output())
+	if !m.isStopped() {
+		m.unsubscribe(m.wsm.Output())
+	} else {
+		m.logger.Debug("already stopped")
+	}
 }

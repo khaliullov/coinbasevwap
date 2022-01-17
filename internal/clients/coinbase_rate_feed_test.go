@@ -211,6 +211,7 @@ func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 			m.logger.WithField("message", msg).Debug("Helloer: send")
 			if err := ws.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
 				m.logger.WithField("error", err).Error("Helloer: WriteMessage error")
+				m.mu.Unlock()
 				return
 			}
 		}
