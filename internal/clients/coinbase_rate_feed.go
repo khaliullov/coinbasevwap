@@ -83,6 +83,7 @@ func NewCoinbaseRateFeed(logger *log.Logger, wg *sync.WaitGroup, config *entity.
 func (m *coinbaseRateFeed) stop() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.logger.Debug("Stopping client")
 	m.stopped = true
 }
 
@@ -125,6 +126,7 @@ func (m *coinbaseRateFeed) subscriptionTimeout() {
 	for {
 		select {
 		case <-m.cmdTimeoutCh: // closed or success
+			m.logger.Debug("successfully changed subscription")
 			timer.Stop()
 			return
 		case <-timer.C:
@@ -144,6 +146,7 @@ func (m *coinbaseRateFeed) changeSubscription(output chan<- []byte, command stri
 		ProductIds: m.config.ProductIDs,
 	})
 	go m.subscriptionTimeout()
+	m.logger.WithField("msg", string(msg)).Debug("sending request")
 	output <- msg
 }
 

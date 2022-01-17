@@ -94,6 +94,7 @@ type Helloer struct {
 	disconnectOnMessageType string
 	callbackCh              chan string
 	mu                      sync.RWMutex
+	logger                  *log.Logger
 }
 
 type HelloerOption func(m *Helloer)
@@ -140,7 +141,7 @@ func WithMessage(message string) HelloerOption {
 	}
 }
 
-func NewHelloer(opts ...HelloerOption) *Helloer {
+func NewHelloer(logger *log.Logger, opts ...HelloerOption) *Helloer {
 	res := &Helloer{
 		buffer:                  []string{},
 		subscribeDelay:          0,
@@ -150,6 +151,7 @@ func NewHelloer(opts ...HelloerOption) *Helloer {
 		disconnectOnMessageType: "",
 		disconnectClient:        false,
 		callbackCh:              make(chan string, 2),
+		logger:                  logger,
 	}
 
 	for _, opt := range opts {
@@ -162,7 +164,7 @@ func NewHelloer(opts ...HelloerOption) *Helloer {
 func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 	ws, err := upgrader.Upgrade(ans, req, nil)
 	if err != nil {
-		log.WithField("error", err).Error("HTTP upgrade error")
+		m.logger.WithField("error", err).Error("HTTP upgrade error")
 		return
 	}
 	defer ws.Close()
@@ -170,11 +172,11 @@ func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 		_, p, err := ws.ReadMessage()
 		if err != nil {
 			if err != io.EOF {
-				log.WithField("error", err).Error("Helloer: ReadMessage error")
+				m.logger.WithField("error", err).Error("Helloer: ReadMessage error")
 			}
 			return
 		}
-		log.WithField("messsage", string(p)).Debug("Helloer: read")
+		m.logger.WithField("messsage", string(p)).Debug("Helloer: read")
 		if bytes.Contains(p, []byte(`"type":"subscribe"`)) {
 			if m.subscribeDelay > 0 {
 				<-time.After(m.subscribeDelay)
@@ -203,16 +205,16 @@ func (m *Helloer) ServeHTTP(ans http.ResponseWriter, req *http.Request) {
 			}
 		}
 		m.mu.Lock()
-		defer m.mu.Unlock()
 		for len(m.buffer) > 0 {
 			var msg string
 			msg, m.buffer = m.buffer[0], m.buffer[1:]
+			m.logger.WithField("message", msg).Debug("Helloer: send")
 			if err := ws.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
-				log.WithField("error", err).Error("Helloer: WriteMessage error")
+				m.logger.WithField("error", err).Error("Helloer: WriteMessage error")
 				return
 			}
-			log.WithField("message", msg).Debug("Helloer: send")
 		}
+		m.mu.Unlock()
 	}
 }
 
@@ -237,13 +239,12 @@ func (m *Hook) Fire(e *log.Entry) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.client != nil {
-		m.client.Stop()
-		m.client = nil
-	}
-
 	if e.Message == m.expectedError {
 		m.errorOccurred = true
+		if m.client != nil {
+			m.client.Stop()
+			m.client = nil
+		}
 	}
 
 	return nil
@@ -276,7 +277,7 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 		"time":	"2022-01-07T19:54:43.295378Z"
 	}
 `
-	srv := httptest.NewServer(NewHelloer(WithMessage(testMessage)))
+	srv := httptest.NewServer(NewHelloer(logger, WithMessage(testMessage)))
 	defer srv.Close()
 
 	URL := httpToWs(srv.URL)
@@ -306,7 +307,7 @@ func (suite *CoinbaseRateFeedSuite) Test_CoinbaseRateFeed_Ok() {
 
 func (suite *CoinbaseRateFeedSuite) runServerTest(logger *log.Logger, expectedError string, withCallback bool,
 	opts ...HelloerOption) {
-	helloer := NewHelloer(opts...)
+	helloer := NewHelloer(logger, opts...)
 	srv := httptest.NewServer(helloer)
 	defer srv.Close()
 
@@ -334,12 +335,14 @@ func (suite *CoinbaseRateFeedSuite) runServerTest(logger *log.Logger, expectedEr
 			}
 
 			if helloer.WhenShouldStopServer() == messageType {
+				logger.Debug("Stopping test server...")
 				srv.Listener.Close()
 				srv.Close()
 				break
 			}
 
 			if messageType == "subscribe" && helloer.ShouldStopClient() {
+				logger.Debug("Stopping client...")
 				client.Stop()
 				break
 			}
