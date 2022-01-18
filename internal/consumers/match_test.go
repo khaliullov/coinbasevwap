@@ -1,8 +1,6 @@
 package consumers
 
 import (
-	"bytes"
-	"io"
 	"testing"
 
 	log "github.com/sirupsen/logrus"
@@ -21,8 +19,6 @@ type MatchConsumerSuite struct {
 	matchUseCase *usecase.MatchUseCase
 	useCase      *usecase.UseCase
 	consumer     Consumer
-	logBuffer    bytes.Buffer
-	oldOutput    io.Writer
 }
 
 func TestMatchConsumerSuite(t *testing.T) {
@@ -30,8 +26,7 @@ func TestMatchConsumerSuite(t *testing.T) {
 }
 
 func (suite *MatchConsumerSuite) SetupTest() {
-	suite.oldOutput = log.StandardLogger().Out
-	log.SetOutput(&suite.logBuffer)
+	logger := log.New()
 	suite.config = &entity.Config{
 		URL:        "https://test.org",
 		Capacity:   200,
@@ -41,11 +36,10 @@ func (suite *MatchConsumerSuite) SetupTest() {
 	suite.matchUseCase = &usecase.MatchUseCase{}
 	suite.useCase = &usecase.UseCase{}
 	suite.useCase.On("Match").Return(suite.matchUseCase)
-	suite.consumer = NewMatchConsumer(suite.useCase, suite.config)
+	suite.consumer = NewMatchConsumer(logger, suite.useCase, suite.config)
 }
 
 func (suite *MatchConsumerSuite) TearDownTest() {
-	log.SetOutput(suite.oldOutput)
 }
 
 func (suite *MatchConsumerSuite) Test_Consume_CastError() {

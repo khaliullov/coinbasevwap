@@ -12,6 +12,7 @@ import (
 type matchConsumer struct {
 	config  *entity.Config
 	useCase usecase.UseCase
+	logger  *log.Logger
 }
 
 var (
@@ -20,10 +21,11 @@ var (
 )
 
 // NewMatchConsumer – create new match consumer that processes *entity.Match events
-func NewMatchConsumer(useCase usecase.UseCase, config *entity.Config) Consumer {
+func NewMatchConsumer(logger *log.Logger, useCase usecase.UseCase, config *entity.Config) Consumer {
 	return &matchConsumer{
 		config:  config,
 		useCase: useCase,
+		logger:  logger,
 	}
 }
 
@@ -31,14 +33,14 @@ func (m *matchConsumer) Consume(msg interface{}) error {
 	message, ok := msg.(*entity.Match)
 
 	if !ok {
-		log.WithFields(log.Fields{
+		m.logger.WithFields(log.Fields{
 			"msg": msg,
 		}).Error("matchConsumer.Consume Bad message")
 
 		return ErrBadMatchMessage
 	}
 
-	log.WithFields(log.Fields{
+	m.logger.WithFields(log.Fields{
 		"message": message,
 	}).Info("Got message")
 

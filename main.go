@@ -43,7 +43,7 @@ func getConfig(logger *log.Logger) *entity.Config {
 	if err != nil {
 		level = log.ErrorLevel
 	}
-	log.SetLevel(level)
+	logger.SetLevel(level)
 
 	cfg := entity.Config{
 		Channels:   strings.Split(*channel, ","),
@@ -70,14 +70,14 @@ func main() {
 
 	client, err := clients.NewCoinbaseRateFeed(logger, &wg, cfg)
 	if err != nil {
-		log.Fatal(err)
+		logger.WithField("error", err).Fatal("Failed to create Coinbase websocket client")
 	}
 
 	repo := repository.NewRepository(cfg)
 	producer := producers.NewProducer()
 	useCase := usecase.NewUseCase(repo, producer, cfg)
 
-	matchConsumer := consumers.NewMatchConsumer(useCase, cfg)
+	matchConsumer := consumers.NewMatchConsumer(logger, useCase, cfg)
 	client.RegisterMatchConsumer(matchConsumer)
 
 	client.Run()
@@ -85,7 +85,7 @@ func main() {
 	go func() {
 		for {
 			if x := <-interrupt; x != nil {
-				log.Info("interrupt")
+				logger.Info("interrupt")
 				client.Stop()
 				return
 			}
@@ -93,5 +93,5 @@ func main() {
 	}()
 
 	wg.Wait()
-	log.Debug("Finished.")
+	logger.Debug("Finished.")
 }
